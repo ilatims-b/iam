@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "iam_calib"
+version = "0.1.0"
+description = "CMA-ES calibration of the Intelligent-Agent Model (Treiber & Chaudhari, arXiv:2310.16816) against lane-free trajectory data"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scipy>=1.10",
+    "cma>=3.3",
+    "numba>=0.58",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+# The package's own source files (config.py, data.py, model.py, ...) live at
+# the repo root alongside run_calibration.py, not under a src/iam_calib/
+# subdirectory -- point setuptools at "." so `pip install -e .` picks them up
+# as the `iam_calib` package from wherever the repo happens to be checked out.
+[tool.setuptools]
+packages = ["iam_calib"]
+
+[tool.setuptools.package-dir]
+iam_calib = "."

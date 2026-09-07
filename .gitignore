@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Virtual env
+.venv/
+
+# Calibration outputs
+results/
+
+# Large/local data (site-specific, not source)
+*.csv
