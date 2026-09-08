@@ -27,7 +27,23 @@ TRUE_PARAMS = {
     "accLongBRef": 0.2, "accLatBRef": 4.0, "s0yB": 0.1, "s0yLatB": 0.1,
 }
 
-CLASS_MIX = [("car", 0.35), ("auto", 0.25), ("motorcycle", 0.30), ("bus", 0.10)]
+# Matches D3F1_lcl_smtF.csv's real class proportions (Bike 46%, Car 23%,
+# LCV 12%, Truck 9%, Auto 6%, MultiAxle 3%, Trailer 1%), so the ground-truth
+# test spans the same fleet the real calibration has to fit -- previously
+# this covered only 4 of the 7 real classes (no LCV/Truck/MultiAxle/Trailer),
+# which meant the classes with the worst real-data lateral RMSE (Truck,
+# MultiAxle -- see the doc's §7/§8) never got a synthetic ground-truth check.
+CLASS_MIX = [("motorcycle", 0.46), ("car", 0.23), ("lcv", 0.12),
+             ("truck", 0.09), ("auto", 0.06), ("multiaxle", 0.03),
+             ("trailer", 0.01)]
+
+# NOTE on --length: vehicles are placed simultaneously along [0, length] at
+# t=0 (this generator has no vehicles entering/leaving over time), so density
+# = vehicles/length is set ENTIRELY by these two flags together -- raising
+# --vehicles without raising --length proportionally silently packs vehicles
+# bumper-to-bumper. D3F1_lcl_smtF.csv's own measured concurrent density is
+# ~0.21 vehicles/m (830,240 rows / 781s of window / 204m corridor extent);
+# match that, don't just scale --vehicles alone.
 
 
 def main() -> int:
@@ -61,11 +77,28 @@ def main() -> int:
         p["v0"] *= float(rng.normal(1.0, 0.12))
         p["T"] *= float(rng.normal(1.0, 0.15))
         p["a"] *= float(rng.normal(1.0, 0.12))
-        if cls[i] == "bus":
-            p["v0"] *= 0.85
-            p["a"] *= 0.7
         if cls[i] == "motorcycle":
             p["v0"] *= 1.15
+        # Heavy-class multipliers below are GUESSED, exactly like the
+        # motorcycle line above -- lower desired speed/acceleration/braking
+        # for bigger, heavier vehicles is directionally defensible, but the
+        # specific factors are not measured or sourced from literature. If
+        # you have real per-class speed/accel data, replace these.
+        if cls[i] == "lcv":
+            p["v0"] *= 0.90
+            p["a"] *= 0.85
+        if cls[i] == "truck":
+            p["v0"] *= 0.75
+            p["a"] *= 0.60
+            p["b"] *= 0.90
+        if cls[i] == "multiaxle":
+            p["v0"] *= 0.65
+            p["a"] *= 0.50
+            p["b"] *= 0.85
+        if cls[i] == "trailer":
+            p["v0"] *= 0.60
+            p["a"] *= 0.45
+            p["b"] *= 0.80
         p_veh.append(p)
 
     x = np.sort(rng.uniform(0, args.length, N))[::-1].copy()

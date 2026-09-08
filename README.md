@@ -139,29 +139,63 @@ not independent observations.
 
 ### Ground truth test
 
-`make_synthetic.py` generates data from the model with known parameters, in
-your exact CSV schema. On a 45-vehicle synthetic set:
+`make_synthetic.py` generates data from the model with known parameters
+(`TRUE_PARAMS`), in your exact CSV schema — the pipeline's ground truth test.
+"True" here means only "the vector that generated this file," not "true of
+real vehicles": it's a plausible point picked deliberately away from
+`config.py`'s own defaults, not measured or drawn from the paper's Table 1.
+`CLASS_MIX` spans all 7 real-fleet classes (bike/car/lcv/truck/auto/
+multiaxle/trailer); the heavy-class speed/accel multipliers are marked
+GUESSED in the code, same caveat as `TRUE_PARAMS` itself.
+
+**Density matters more than it looks.** Vehicles are placed simultaneously
+along `[0, --length]` at t=0 — this generator has no vehicles entering or
+leaving over time — so `--vehicles / --length` sets the traffic density
+directly. Raising `--vehicles` without raising `--length` to match packs
+vehicles bumper-to-bumper: at 554 vehicles on the 400 m default, that's 1.4
+vehicles/metre, gridlock from the first timestep, and it produces a lateral
+"floor" *worse* than real calibrated D3F1 error — backwards for what should
+be a best-case number. Match your real corridor's own measured concurrent
+density instead (rows / window seconds / corridor extent) — for
+`D3F1_lcl_smtF.csv` that's ~0.21 vehicles/m, hence `--length 1430` for 300
+vehicles below.
+
+On a 300-vehicle, 7-class, density-matched set (`--length 1430
+--road-width 8.7`, matching D3F1's confirmed carriageway):
 
 | | v0 | T | s0 | a | b | s0y | s0yLat | sensLat | tauLatOVM | pushLong | pushLat |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| true | 11.0 | 1.10 | 1.40 | 1.30 | 1.80 | 0.220 | 0.350 | 1.60 | 0.90 | 0.120 | 0.150 |
-| recovered | 10.96 | 0.85 | 2.47 | 1.09 | 1.93 | 0.150 | 0.288 | 1.59 | 0.78 | 0.176 | 0.064 |
-| error | 0% | 23% | **77%** | 17% | 7% | 32% | 18% | 1% | 13% | 46% | **57%** |
+| true (car/auto) | 11.0 | 1.10 | 1.40 | 1.30 | 1.80 | 0.220 | 0.350 | 1.60 | 0.90 | 0.120 | 0.150 |
+| recovered, median | 11.83 | 1.11 | 1.37 | 1.10 | 1.77 | 0.206 | 0.353 | 1.59 | 0.89 | 0.126 | 0.154 |
+| error | 13% | 1% | 2% | 6% | 2% | 6% | 1% | 1% | 2% | 5% | 3% |
 
-Held-out validation: 14/14 vehicles simulated without divergence, median RMSE
-0.38 m longitudinal / 0.36 m lateral / 0.33 m/s speed.
+Every core parameter now recovers within ~13% — at 45 vehicles, `s0` (77%)
+and `pushLat` (57%) looked like structural failures; at 300 vehicles and the
+right density they largely disappear. The lesson wasn't "these two are
+unidentifiable," it was "45 vehicles wasn't enough data to identify them."
+The boundary parameters tell the opposite story and stay genuinely hard: at
+this same scale, `accLongBRef` and `s0yB` still come back **62–113% off**
+(`accLatBRef`/`s0yLatB` ~20%) — consistent with real D3F1, where the
+identifiability screen independently flags the same two as unidentified (see
+`iam_calib`'s "Calibrating the IAM" doc, §8). Two parameters that only
+jointly matter when a vehicle is close enough to a road edge stay hard to
+pin down regardless of fleet size, because that situation itself stays rare.
 
-The two failures are **expected and instructive**. `s0` (minimum gap) is only
-excited in near-stopped traffic, which this free-flow synthetic set doesn't
-contain. `pushLat` is the weakest parameter in the model — the diagnostics
-independently flag it (48% at its lower bound, lowest sensitivity of all 11).
-If your real data shows the same pattern for `s0`, it means your data has no
-congested episodes, not that the code is broken.
+Held-out validation, same 300-vehicle set, 90 held-out vehicles: **0.30 m
+longitudinal / 0.12 m lateral / 0.24 m/s speed**, essentially matching the
+0.30/0.08/0.23 floor from simulating the literal `TRUE_PARAMS` directly with
+no fitting at all — at this scale, CMA-ES recovers nearly everything
+reachable. Applying the real, D3F1-calibrated class parameters to D3F1's own
+155 held-out vehicles instead gives 0.73/0.14/0.55 — 2.3–2.4× this floor
+longitudinally and in speed, ~1.2× (near parity) laterally. That gap is the
+honest answer to "is this a good fit": real driver behaviour and real sensor
+noise the synthetic model doesn't reproduce, not a broken pipeline.
 
 Run it yourself:
 
 ```bash
-python make_synthetic.py --out synthetic.csv --vehicles 45 --duration 70
+python make_synthetic.py --out synthetic.csv --vehicles 300 --duration 60 \
+    --length 1430 --road-width 8.7
 python -m pytest tests/ -v          # 21 tests
 python -m pytest tests/ -v -m slow  # recovery test (minutes)
 ```
