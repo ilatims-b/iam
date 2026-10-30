@@ -10,6 +10,58 @@ implementation, [MTGermany/mixedTraffic](https://github.com/MTGermany/mixedTraff
 
 ---
 
+## Report: whole-record calibration to lane-free mixed traffic
+
+`paper_joint/calib_report/calib_report.tex` is the report on calibrating the IAM
+to a 781 s record of lane-free mixed traffic (554 vehicles, seven classes). All
+vehicles are simulated together from their measured entry states, with one
+parameter vector per class, an exit stop line read from the measured stops, and
+a train/test split by vehicle inside the same simulation.
+
+**Data.** The trajectory record (`D3F1_lcl_smtF.csv`) and the vehicle dimensions
+were shared for this project and are not included. Place the file in the
+repository root to rerun anything below. The IDM values of the fixed-IDM runs
+are in `results/idm_duggal_by_class.json` (per class) and in the command below
+(single set).
+
+**What is included.** For the three compared runs (`results/j12_dims`: all
+parameters free; `results/j13_duggal_idm`: IDM fixed per class;
+`results/j14_chandra_dims`: IDM fixed at a single set) the fitted class
+parameters, run configuration, split and convergence history, and for the free
+fit the one-at-a-time sensitivity profiles. The report's figures and tables in
+`paper_joint/calib_report/figs/` are generated from these and the data.
+
+**Rebuild the report's figures and tables** (a few minutes; needs the data):
+
+```bash
+# from this directory; PYTHONPATH=.. makes the package importable as iam_calib
+PYTHONPATH=.. python plot_profiles.py --run results/j12_dims
+PYTHONPATH=.. python make_calib_report.py
+PYTHONPATH=.. python overlap_compare.py          # Appendix: dimensions and overlaps
+cd paper_joint/calib_report && pdflatex calib_report.tex && pdflatex calib_report.tex
+```
+
+**Rerun the calibrations** (two hours of fitting each), from the parent directory:
+
+```bash
+DIMS="Auto=2.7x1.4 Bike=1.8x0.65 Car=4x1.7 LCV=4.5x1.75 Truck=8.5x2.4 MultiAxle=12x2.5 Trailer=15.5x2.5"
+COMMON="iam_calib/D3F1_lcl_smtF.csv --whole-record --exit-signal --bounds realistic \
+        --dims $DIMS --maxfevals 1000000 --max-minutes 120 --workers 4"
+python -m iam_calib.calibrate_joint $COMMON --out iam_calib/results/j12_dims
+python -m iam_calib.calibrate_joint $COMMON --fix-class iam_calib/results/idm_duggal_by_class.json \
+    --out iam_calib/results/j13_duggal_idm
+python -m iam_calib.calibrate_joint $COMMON \
+    --fix v0=18.7615 T=0.8899 s0=1.05 a=2.0 b=2.6327 delta=4.42 --out iam_calib/results/j14_chandra_dims
+# sensitivity profiles of the free fit (3151 simulations, about 15 min on 6 cores)
+cd iam_calib && PYTHONPATH=.. python oat_profiles.py --run results/j12_dims --workers 6
+```
+
+Numba caches compiled kernels in `__pycache__`; after changing `fastcore.py`,
+delete the cached `jointsim._run_scene*` files, since a cached caller is not
+recompiled when a function it calls changes.
+
+---
+
 ## Quick start
 
 ```bash
@@ -30,7 +82,7 @@ Expected runtime for ~800 vehicles at 3000 evaluations each: **40–60 min on 8 
 | File | Contents |
 |---|---|
 | `class_summary.csv` | rows, vehicles, durations, speeds, lateral extent per class |
-| `per_vehicle_params.csv` | one row per vehicle: 11 parameters, fitness, GoF components |
+| `per_vehicle_params.csv` | one row per vehicle: parameters, fitness, GoF components |
 | `class_params.csv` / `.json` | pooled class-level parameters with IQR, after shrinkage |
 | `bound_hits.csv` | fraction of vehicles pinned to each parameter bound |
 | `identifiability.csv` | local sensitivity screen with an `UNIDENTIFIED`/`weak`/`identified` verdict |
@@ -105,7 +157,7 @@ Two design decisions here were forced by measurement, not taste:
 
   (all at the true parameters, so every number here is irreducible noise)
 
-Integration uses the **ballistic update**, as in the reference implementation.
+Integration follows the reference implementation (trapezoid positions, lateral-heading clamp — see item 12 under Paper vs. code).
 RK4 buys nothing: the right-hand side isn't smooth, because of the min/max in
 Eq. (7), the kink in `min(1, exp(·))` in Eq. (5), and discrete switching of
 which neighbour is selected.
@@ -116,7 +168,7 @@ Candidates are fixed once per window from the *measured* ego position using a
 generous radius (±80 m, ±8 m), because the simulated ego drifts and must not
 lose a neighbour mid-run. Interaction selection then happens against the
 *simulated* position at each step, using the interaction-strength threshold
-`bIntCrit` from `road.js` — not a geometric rule.
+`bIntCrit` (0.1) from `road.js` — not a geometric rule.
 
 ---
 
@@ -204,23 +256,60 @@ python -m pytest tests/ -v -m slow  # recovery test (minutes)
 
 ## Paper vs. code
 
-`model.py` follows the JS implementation where the two disagree. Documented
+`model.py` follows the JS implementation (MTGermany/mixedTraffic, files
+`models.js`, `road.js`, `vehicle.js`, target scenario `sim_bicycles_IAM.js` —
+lane-free — **not** `sim_lanes_IAM.js`) where the two disagree. Documented
 divergences, all of which affect calibration:
 
-1. `s_x` is clamped at zero: `sx = max(0, dx - L_j)`. Negative gaps produce
-   maximum deceleration via the IDM's `max(s, 0.1·s0)` denominator and the
-   `-bmax` floor, not via a negative gap.
-2. `α(s_y) = min(exp(−s_y/s0y), 1)` uses **signed** `s_y`, not `|s_y|` as
-   printed in Eq. (5). Taking Eq. (5) literally would wrongly attenuate
-   overlapping vehicles; the code clamps to 1 instead.
-3. Parallel driving (`dx < L_j` and `s_y > 0`) multiplies the longitudinal
-   force by `longParReductFactor = 0.2`, rather than zeroing it as the paper says.
-4. **Two** attenuation widths (`s0y` longitudinal, `s0yLat` lateral), not one.
-5. **Two** anisotropy factors (`pushLong`, `pushLat`), not one λ.
+1. **The underlying car-following model is ACC, not IDM.** `ACC.calcAccInt`
+   blends IDM with a Constant-Acceleration Heuristic (CAH) that needs the
+   leader's acceleration `a_l`: `mix = IDM` if `IDM > CAH` else
+   `CAH + b·tanh((IDM−CAH)/b)`; final `0.99·mix + 0.01·IDM`. A cutting-in
+   vehicle (`a_l ≈ 0`) makes IDM brake hard; CAH softens that. See
+   `model.acc_int`.
+2. `s_x` is clamped at zero: `sx = max(0, dx - L_j)`.
+3. `α(s_y) = min(exp(−s_y/s0y), 1)` uses **signed** `s_y`, not `|s_y|`.
+4. Parallel driving (`dx < L_j` and `s_y > 0`) multiplies the longitudinal
+   force by `longParReductFactor = 0.2` (`sim_bicycles`; `sim_lanes` uses 0.1).
+5. **Two** attenuation widths (`s0y`, `s0yLat`) and **two** anisotropy factors
+   (`pushLong`, `pushLat`), not one each. Boundary has two widths too.
 6. Lateral interaction is clamped to ±4·b.
-7. Boundary forces in the JS discretise an anticipation horizon over 8 steps;
-   this port implements the j = 0 term only. The JS's own comments note the
-   complications were largely deactivated with no loss.
+7. Neighbour preselection: `|force| > bIntCrit = 0.1` (road.js; an earlier
+   version of this port used 0.02), followers only if their gap is below
+   `smaxfollow = 0.5 m` (road.js uses the *global* `s0` of the sim, 0.5 m — not
+   the vehicle's own `s0`; an earlier version used 30 m).
+8. Lateral push by followers is zeroed when the lateral gap is already opening.
+9. **Leader too close to a road edge:** if vehicles overlap laterally and the
+   leader leaves less than `W_subject + s0yLatB` on one side, the lateral
+   desire `α` is forced to ±1 towards the open side (skipped if both sides are
+   too narrow). Not in the paper. (An earlier version of this port documented
+   it but did not implement it.)
+10. Boundary: lateral force grows linearly past the edge, is scaled by
+    `0.2 + 0.8·v/v0max`, and has two attenuation widths. The JS discretises an
+    anticipation horizon over `nj = 8` steps, but with `dTantic = 0` every term
+    is identical, so the j = 0 term implemented here is **exactly** equivalent.
+11. **Constant lateral bias per vehicle type** (`accBiasLat`, road.js step 6):
+    `sim_bicycles` truck +0.8 m/s² to the right, bike and others 0. The JS
+    counts right as positive; this code counts left as positive, so truck =
+    −0.8. Here it is a free parameter fitted per vehicle and pooled per class
+    (default 0), so it also absorbs whatever habitual lateral offset a class has.
+12. **Integration** (`road.updateSpeedPositions`): speeds update first; lateral
+    speed is then limited by the heading angle `dvdu = vy/vx`, itself rate-
+    limited (`dotdvdumax = 0.3`) and capped (`dvdumax = 0.3`); positions use
+    the trapezoid of old and new speed. The JS only moves its stored `dvdu`
+    when the new value differs by more than `dotdvdumax·dt`, so tiny lateral
+    speeds are clamped to ≈0 — replicated deliberately.
+13. **`a_l` source (our one intended difference).** The JS simulates every
+    vehicle at once, so each leader's `a_l` is its simulated `accLong`. We fit
+    one ego at a time and replay neighbours from measured data, so a
+    neighbour's `a_l` is its measured `Long_Acc`. The ego's own `a_l` (used when
+    it leads a follower) is its **simulated** previous-step acceleration, as in
+    the JS. The JS also adds random noise to `accLong`; we do not.
+
+**Deliberately not ported** (not applicable to lane-free data or would make the
+objective stochastic): floor field (lanes) and its sign/fade, `bikesNoLeftSpace`
+(only inside the floor-field branch), acceleration noise, obstacles and
+traffic lights.
 
 Defaults also differ from the paper's Table 1 — the JS uses `s0y = 0.10 m`
 where Table 1 says 0.3 m. The JS values are used here.

@@ -1,0 +1,9 @@
+{
+ "_source": "Auto, Bike, Car: Duggal pairwise means by follower type (page 10). LCV, Truck, MultiAxle (Trailer shares it): extrapolated from Car; a and b scaled by the measured 95th-percentile acceleration / deceleration ratio to Car in D3F1, v0 lowered and T, s0 raised with vehicle size, delta as Car.",
+ "Auto":      {"v0": 20.27, "T": 0.31, "s0": 0.64, "a": 2.57, "b": 0.93, "delta": 4.50},
+ "Bike":      {"v0": 21.28, "T": 0.25, "s0": 1.04, "a": 1.86, "b": 1.28, "delta": 4.43},
+ "Car":       {"v0": 21.43, "T": 0.29, "s0": 1.00, "a": 2.09, "b": 1.35, "delta": 4.33},
+ "LCV":       {"v0": 20.00, "T": 0.31, "s0": 1.10, "a": 1.90, "b": 1.12, "delta": 4.33},
+ "Truck":     {"v0": 18.00, "T": 0.36, "s0": 1.30, "a": 1.84, "b": 1.15, "delta": 4.33},
+ "MultiAxle": {"v0": 16.00, "T": 0.42, "s0": 1.50, "a": 1.46, "b": 1.05, "delta": 4.33}
+}

@@ -14,13 +14,13 @@ Run, in order:
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Sequence
+from typing import Tuple, Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
 
 from .calibrate import CalibResult, default_params
-from .config import PipelineConfig, SPEC_BY_NAME
+from .config import DEFAULT_VEHICLE_DIMS, dims_for_class, PipelineConfig, SPEC_BY_NAME
 from .data import VehicleWindow
 from .objective import gof, gof_components
 
@@ -157,20 +157,40 @@ def pool_by_class(df: pd.DataFrame, free_params: Sequence[str],
 
 
 def shrink_thin_classes(pooled: pd.DataFrame, free_params: Sequence[str],
-                        min_vehicles: int = 15) -> pd.DataFrame:
+                        min_vehicles: int = 10,
+                        dims: Optional[Dict[str, Tuple[float, float]]] = None
+                        ) -> pd.DataFrame:
     """
-    James-Stein-style shrinkage of thin classes toward the population median.
+    Give a thin class the parameters of a similar vehicle type.
 
-    Weight w = n / (n + min_vehicles), so a class with n = min_vehicles sits
-    halfway between its own estimate and the population. Crude, but it beats
-    reporting a bus parameter fitted on four buses.
+    An earlier version shrank thin classes toward the fleet median, which
+    produces a number that is a measurement of neither the class nor anything
+    else. A class with fewer than `min_vehicles` vehicles now simply adopts the
+    fitted vector of the dimensionally nearest class that clears the threshold,
+    so every reported value remains an actual fit to actual vehicles of a
+    comparable size.
     """
+    dims = dims or DEFAULT_VEHICLE_DIMS
     out = pooled.copy()
-    for n in free_params:
-        grand = float(np.average(pooled[n], weights=pooled["n_vehicles"]))
-        w = pooled["n_vehicles"] / (pooled["n_vehicles"] + min_vehicles)
-        out[n] = w * pooled[n] + (1 - w) * grand
-        out[f"{n}_shrunk"] = ~(w > 0.8)
+    big = pooled[pooled["n_vehicles"] >= min_vehicles]
+    if big.empty:                      # nothing to borrow from
+        for n in free_params:
+            out[f"{n}_shared"] = False
+        return out
+    for i, row in pooled.iterrows():
+        if row["n_vehicles"] >= min_vehicles:
+            for n in free_params:
+                out.at[i, f"{n}_shared"] = False
+            continue
+        Lc, Wc = dims_for_class(row["vclass"], dims)
+        donor = min(
+            big.itertuples(),
+            key=lambda r: abs(dims_for_class(r.vclass, dims)[0] - Lc)
+                        + abs(dims_for_class(r.vclass, dims)[1] - Wc))
+        for n in free_params:
+            out.at[i, n] = getattr(donor, n)
+            out.at[i, f"{n}_shared"] = True
+        out.at[i, "shared_with"] = donor.vclass
     return out
 
 

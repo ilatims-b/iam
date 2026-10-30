@@ -17,7 +17,8 @@ import argparse
 import numpy as np
 import pandas as pd
 
-from iam_calib.config import RoadConfig, dims_for_class, DEFAULT_VEHICLE_DIMS
+from iam_calib.config import (MODEL_CONSTANTS as C, RoadConfig,
+                              dims_for_class, DEFAULT_VEHICLE_DIMS)
 from iam_calib.model import accelerations
 
 TRUE_PARAMS = {
@@ -25,6 +26,7 @@ TRUE_PARAMS = {
     "s0y": 0.22, "s0yLat": 0.35, "sensLat": 1.6, "tauLatOVM": 0.9,
     "pushLong": 0.12, "pushLat": 0.15,
     "accLongBRef": 0.2, "accLatBRef": 4.0, "s0yB": 0.1, "s0yLatB": 0.1,
+    "accBiasLat": 0.0,
 }
 
 # Matches D3F1_lcl_smtF.csv's real class proportions (Bike 46%, Car 23%,
@@ -88,6 +90,9 @@ def main() -> int:
             p["v0"] *= 0.90
             p["a"] *= 0.85
         if cls[i] == "truck":
+            # sim_bicycles_IAM.js accBiasRightTruck=+0.8 (right-positive);
+            # our frame is left-positive. This one IS sourced from the JS.
+            p["accBiasLat"] = -0.8
             p["v0"] *= 0.75
             p["a"] *= 0.60
             p["b"] *= 0.90
@@ -108,19 +113,23 @@ def main() -> int:
 
     rows = []
     valid_all = np.ones(N - 1, dtype=bool)
+    ax_prev = np.zeros(N)                       # previous-step accelerations
+    dvdu = vy / np.maximum(vx, 1e-4)            # stored heading angle (tan)
+    dt = args.dt
 
     for k in range(T):
-        t = k * args.dt
+        t = k * dt
         ax = np.zeros(N); ay = np.zeros(N)
         for i in range(N):
             j = np.arange(N) != i
             ax[i], ay[i] = accelerations(
                 x[i], y[i], vx[i], vy[i],
-                x[j], y[j], vx[j], vy[j], L[j], W[j], valid_all,
-                L[i], W[i], p_veh[i], road,
+                x[j], y[j], vx[j], vy[j], ax_prev[j], L[j], W[j], valid_all,
+                L[i], W[i], p_veh[i], road, ax_prev[i],
             )
         ax += rng.normal(0, args.noise, N)
         ay += rng.normal(0, args.noise * 0.5, N)
+        ax_prev = ax.copy()
 
         for i in range(N):
             rows.append((f"V_{i:03d}", cls[i], t, 1000.0 + t,
@@ -129,11 +138,25 @@ def main() -> int:
                          vx[i], vy[i], np.hypot(vx[i], vy[i]),
                          ax[i], ay[i], np.hypot(ax[i], ay[i])))
 
-        vx_n = np.maximum(0.0, vx + ax * args.dt)
-        vy_n = vy + ay * args.dt
-        x = x + vx * args.dt + 0.5 * ax * args.dt ** 2
-        y = y + vy * args.dt + 0.5 * ay * args.dt ** 2
-        y = np.clip(y, -args.road_width / 2 - 0.3, args.road_width / 2 + 0.3)
+        # same integration as objective.simulate / fastcore.simulate_core
+        vx_n = vx + ax * dt
+        vy_n = vy + ay * dt
+        dvdu_new = vy_n / np.maximum(vx_n, 1e-4)
+        move = np.abs(dvdu_new - dvdu) > dt * C.dotdvdumax
+        dvdu = np.where(move, dvdu + np.sign(dvdu_new - dvdu) * C.dotdvdumax * dt,
+                        dvdu)
+        dvdu = np.clip(dvdu, -C.dvdumax, C.dvdumax)
+        vy_max = np.abs(dvdu * vx_n)
+        vy_n = np.clip(vy_n, -vy_max, vy_max)
+        dy_step = 0.5 * (vy + vy_n) * dt
+        stopped = vx_n < -1e-6
+        dx_step = np.where(stopped,
+                           -0.5 * vx * vx / np.where(ax == 0, 1.0, ax),
+                           0.5 * (vx + vx_n) * dt)
+        vx_n = np.maximum(0.0, vx_n)
+        x = x + dx_step
+        y = np.clip(y + dy_step, -args.road_width / 2 - 0.3,
+                    args.road_width / 2 + 0.3)
         vx, vy = vx_n, vy_n
 
     df = pd.DataFrame(rows, columns=[

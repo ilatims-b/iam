@@ -16,7 +16,7 @@ from iam_calib.calibrate import default_params, from_norm, to_norm
 from iam_calib.config import MODEL_CONSTANTS as C
 from iam_calib.config import FREE_PARAMS, SPEC_BY_NAME
 from iam_calib.fastcore import _accel, pack, unpack
-from iam_calib.model import accelerations, idm_acc_free, idm_acc_int
+from iam_calib.model import acc_int, accelerations, idm_acc_free, idm_acc_int
 from iam_calib.objective import gof, make_fast_gof, simulate
 
 CSV = "synthetic.csv"
@@ -65,7 +65,7 @@ class TestModelInvariants:
     def test_no_neighbours_gives_free_acceleration(self):
         p = default_params()
         z = np.zeros(4)
-        al, at = accelerations(0.0, 0.0, 5.0, 0.0, z, z, z, z, z, z,
+        al, at = accelerations(0.0, 0.0, 5.0, 0.0, z, z, z, z, z, z, z,
                               np.zeros(4, bool), 4.0, 1.7, p,
                               RoadConfig(enabled=False))
         assert al == pytest.approx(idm_acc_free(5.0, p["v0"], p["a"]))
@@ -74,7 +74,7 @@ class TestModelInvariants:
     def test_lateral_free_term_damps_lateral_speed(self):
         p = default_params()
         z = np.zeros(4)
-        _, at = accelerations(0.0, 0.0, 5.0, 1.0, z, z, z, z, z, z,
+        _, at = accelerations(0.0, 0.0, 5.0, 1.0, z, z, z, z, z, z, z,
                               np.zeros(4, bool), 4.0, 1.7, p,
                               RoadConfig(enabled=False))
         assert at < 0                       # opposes the lateral speed
@@ -84,7 +84,7 @@ class TestModelInvariants:
         nb = lambda v: np.array([v, 0.0, 0.0, 0.0])
         al, _ = accelerations(
             0.0, 0.0, 10.0, 0.0,
-            nb(6.0), nb(0.0), nb(2.0), nb(0.0), nb(4.0), nb(1.7),
+            nb(6.0), nb(0.0), nb(2.0), nb(0.0), nb(0.0), nb(4.0), nb(1.7),
             np.array([True, False, False, False]), 4.0, 1.7, p,
             RoadConfig(enabled=False))
         assert al < -0.5
@@ -95,7 +95,7 @@ class TestModelInvariants:
         nb = lambda v: np.array([v, 0.0, 0.0, 0.0])
         _, at = accelerations(
             0.0, 0.0, 10.0, 0.0,
-            nb(7.0), nb(0.5), nb(3.0), nb(0.0), nb(4.0), nb(1.7),
+            nb(7.0), nb(0.5), nb(3.0), nb(0.0), nb(0.0), nb(4.0), nb(1.7),
             np.array([True, False, False, False]), 4.0, 1.7, p,
             RoadConfig(enabled=False))
         assert at < 0
@@ -104,9 +104,67 @@ class TestModelInvariants:
         p = default_params()
         road = RoadConfig(enabled=True, y_left=3.5, y_right=-3.5)
         z = np.zeros(2)
-        _, at = accelerations(0.0, 3.3, 10.0, 0.0, z, z, z, z, z, z,
+        _, at = accelerations(0.0, 3.3, 10.0, 0.0, z, z, z, z, z, z, z,
                               np.zeros(2, bool), 4.0, 1.7, p, road)
         assert at < 0                       # near left edge -> pushed right
+
+
+class TestACC:
+    def test_acc_matches_idm_when_leader_brakes_like_idm_expects(self):
+        """ACC is within the 1% IDM blend of CAH-softened IDM, never harder."""
+        p = default_params()
+        s = np.array([2.0, 5.0, 20.0])
+        idm = idm_acc_int(s, 10.0, 8.0, p)
+        acc = acc_int(s, 10.0, 8.0, 0.0, p)
+        assert np.all(acc >= idm - 1e-9)           # never brakes harder than IDM
+
+    def test_cut_in_is_softer_than_idm(self):
+        """Tiny gap to a non-braking leader: IDM panics, ACC does not."""
+        p = default_params()
+        idm = idm_acc_int(np.array([1.0]), 8.0, 7.0, p)[0]
+        acc = acc_int(np.array([1.0]), 8.0, 7.0, 0.0, p)[0]
+        assert acc > idm + 1.0
+
+    def test_leader_braking_hard_gives_harder_braking(self):
+        p = default_params()
+        calm = acc_int(np.array([6.0]), 10.0, 8.0, 0.0, p)[0]
+        hard = acc_int(np.array([6.0]), 10.0, 8.0, -4.0, p)[0]
+        assert hard < calm
+
+    def test_floored_at_bmax(self):
+        p = default_params()
+        acc = acc_int(np.array([1e-6]), 30.0, 0.0, -9.0, p)
+        assert acc[0] >= -C.bmax - 1e-9
+
+
+class TestLateralBiasAndOverride:
+    def test_bias_adds_constant_lateral_acceleration(self):
+        p = default_params()
+        z = np.zeros(2)
+        args = (0.0, 0.0, 5.0, 0.0, z, z, z, z, z, z, z, np.zeros(2, bool),
+                4.0, 1.7)
+        _, a0 = accelerations(*args, p, RoadConfig(enabled=False))
+        p2 = dict(p, accBiasLat=-0.8)
+        _, a1 = accelerations(*args, p2, RoadConfig(enabled=False))
+        assert a1 - a0 == pytest.approx(-0.8)
+
+    def test_too_narrow_override_pushes_to_open_side(self):
+        """Slow leader hugging the right edge, ego laterally overlapping and
+        slightly to its right: the right side is too narrow, so the ego must
+        be pushed LEFT (+y) -- opposite to ordinary repulsion."""
+        p = default_params()
+        road = RoadConfig(enabled=True, y_left=4.35, y_right=-4.35)
+        nb = lambda v: np.array([v, 0.0])
+        valid = np.array([True, False])
+        # leader at y=-3.6 (0.75 m from right edge); ego at y=-3.8 (right of it)
+        _, at = accelerations(0.0, -3.8, 10.0, 0.0,
+                              nb(6.0), nb(-3.6), nb(1.0), nb(0.0), nb(0.0),
+                              nb(4.0), nb(1.7), valid, 4.0, 1.7, p, road)
+        _, at_off = accelerations(0.0, -3.8, 10.0, 0.0,
+                                  nb(6.0), nb(-3.6), nb(1.0), nb(0.0),
+                                  nb(0.0), nb(4.0), nb(1.7), valid, 4.0, 1.7,
+                                  p, RoadConfig(enabled=False))
+        assert at_off < 0 < at                    # sign flips with override
 
 
 class TestJITAgreement:
@@ -124,16 +182,16 @@ class TestJITAgreement:
                     a1 = accelerations(
                         w.x[i], w.y[i], w.vx[i], w.vy[i],
                         w.nb_x[i], w.nb_y[i], w.nb_vx[i], w.nb_vy[i],
-                        w.nb_L[i], w.nb_W[i], w.valid[i],
-                        w.L, w.W, p, cfg.road)
+                        w.nb_ax[i], w.nb_L[i], w.nb_W[i], w.valid[i],
+                        w.L, w.W, p, cfg.road, w.ax[i])
                     a2 = _accel(
                         w.x[i], w.y[i], w.vx[i], w.vy[i],
                         w.nb_x[i], w.nb_y[i], w.nb_vx[i], w.nb_vy[i],
-                        w.nb_L[i], w.nb_W[i], w.valid[i],
-                        w.L, w.W, pv, C.bmax, C.longParReductFactor,
+                        w.nb_ax[i], w.nb_L[i], w.nb_W[i], w.valid[i],
+                        w.ax[i], w.L, w.W, pv, C.bmax, C.longParReductFactor,
                         C.bIntCrit, C.smaxfollow, C.accLatIntMaxFactor,
                         C.useSeveralLeaders, C.accLatBMax, C.v0max,
-                        0, 0.0, 0.0)
+                        C.cool, 0, 0, 0.0, 0.0)
                     worst = max(worst, abs(a1[0] - a2[0]), abs(a1[1] - a2[1]))
         assert worst < 1e-10, f"JIT diverged from reference by {worst:.2e}"
 
@@ -249,3 +307,121 @@ class TestRecovery:
             est = ok[name].median()
             assert abs(est - truth[name]) / truth[name] < tol, \
                 f"{name}: got {est:.3f}, true {truth[name]:.3f}"
+
+
+# ---------------------------------------------------------------------------
+# Search bounds must reach the pool workers. They are spawned, so a bound set
+# only in the main process is invisible to them, and the optimiser then
+# searches a different box from the one used to decode the saved parameters.
+def _worker_bounds(name):
+    from iam_calib.config import SPEC_BY_NAME
+    sp = SPEC_BY_NAME[name]
+    return sp.lo, sp.hi, sp.log
+
+
+def test_search_bounds_reach_spawned_workers():
+    from concurrent.futures import ProcessPoolExecutor
+    from iam_calib.calibrate_joint import apply_bounds, _init_pool
+    ov = {"a": (0.02, 4.0, True), "sensLat": (0.002, 6.0, True)}
+    with ProcessPoolExecutor(1, initializer=_init_pool,
+                             initargs=(None, ov)) as pool:
+        assert pool.submit(_worker_bounds, "a").result() == (0.02, 4.0, True)
+        assert pool.submit(_worker_bounds, "sensLat").result() == (0.002, 6.0, True)
+
+
+# ---------------------------------------------------------------------------
+# Joint (simultaneous) simulation. Two defects got past an earlier version of
+# these tests: a 24-neighbour cap that filled slots behind the ego first and so
+# dropped leaders, and vehicles vanishing when their measured twin left.
+def _joint_scene(states, T, present=None):
+    """states: list of (x, y, vx, L, W). Returns a scene dict for _run_scene."""
+    n = len(states)
+    X = np.full((n, T), np.nan); Y = X.copy(); VX = X.copy(); VY = X.copy(); AX = X.copy()
+    for k, (x, y, v, L_, W_) in enumerate(states):
+        X[k, :] = x; Y[k, :] = y; VX[k, :] = v; VY[k, :] = 0.0; AX[k, :] = 0.0
+    pres = np.ones((n, T), bool) if present is None else present
+    return dict(X=X, Y=Y, VX=VX, VY=VY, AX=AX, present=pres,
+                L=np.array([s_[3] for s_ in states]),
+                W=np.array([s_[4] for s_ in states]),
+                cls=["car"] * n, T=T, dt=0.04, x_exit_c=1e9)
+
+
+def _joint_run(scene, p, K=96):
+    from iam_calib.calibrate_joint import run_scene
+    P = np.array([[p[k] for k in PARAM_ORDER_]])
+    road = RoadConfig(enabled=True, y_left=8.9, y_right=0.0)
+    return run_scene(scene, P, {"car": 0}, road, K=K, return_trunc=True)
+
+
+from iam_calib.fastcore import PARAM_ORDER as PARAM_ORDER_
+
+
+def _reference_step(states, i, p, keep):
+    """x after one 0.04 s step for vehicle i, from the readable reference model
+    and the neighbours listed in `keep`."""
+    road = RoadConfig(enabled=True, y_left=8.9, y_right=0.0)
+    xs = np.array([states[j][0] for j in keep]); ys = np.array([states[j][1] for j in keep])
+    vs = np.array([states[j][2] for j in keep]); zero = np.zeros(len(keep))
+    ax, _ = accelerations(states[i][0], states[i][1], states[i][2], 0.0,
+                          xs, ys, vs, zero, zero,
+                          np.array([states[j][3] for j in keep]),
+                          np.array([states[j][4] for j in keep]),
+                          np.ones(len(keep), bool), states[i][3], states[i][4],
+                          p, road, 0.0)
+    vn = max(0.0, states[i][2] + ax * 0.04)
+    return states[i][0] + 0.5 * (states[i][2] + vn) * 0.04
+
+
+def test_joint_step_matches_reference_model():
+    p = default_params()
+    states = [(100.0, 4.0, 8.0, 4.0, 1.7), (112.0, 4.2, 5.0, 4.0, 1.7),
+              (92.0, 3.9, 9.0, 4.0, 1.7), (130.0, 5.0, 3.0, 4.0, 1.7)]
+    sx, _, _, nt = _joint_run(_joint_scene(states, 2), p)
+    assert nt == 0
+    for i in range(len(states)):
+        keep = [j for j in range(len(states)) if j != i]
+        assert sx[i, 1] == pytest.approx(_reference_step(states, i, p, keep), abs=1e-9)
+
+
+def test_joint_cap_keeps_nearest_neighbours_from_both_sides():
+    """With room for two neighbours, the ego must see the two NEAREST by
+    longitudinal distance, here one leader and one follower, not the two
+    nearest vehicles behind it."""
+    p = default_params()
+    states = [(100.0, 4.0, 8.0, 4.0, 1.7),      # ego
+              (104.0, 4.0, 2.0, 4.0, 1.7),      # leader 4 m ahead
+              (95.0, 4.2, 8.0, 4.0, 1.7),       # followers behind, nearer than...
+              (94.0, 3.8, 8.0, 4.0, 1.7),
+              (93.0, 4.1, 8.0, 4.0, 1.7),
+              (160.0, 4.0, 8.0, 4.0, 1.7)]      # ...a far vehicle ahead
+    sx, _, _, nt = _joint_run(_joint_scene(states, 2), p, K=2)
+    assert nt > 0                                     # the cap really was exceeded
+    assert sx[0, 1] == pytest.approx(_reference_step(states, 0, p, [1, 2]), abs=1e-9)
+
+
+def test_joint_vehicle_outlives_its_measured_twin():
+    """A leader whose measured twin stops being present must stay on the road
+    and keep influencing the follower. The follower is closing on a stopped
+    leader, so keeping it must slow the follower versus the leader never
+    existing."""
+    p = default_params(); T = 200
+    follower = (50.0, 4.0, 10.0, 4.0, 1.7); leader = (80.0, 4.0, 0.0, 4.0, 1.7)
+    pres = np.ones((2, T), bool); pres[1, 20:] = False          # twin leaves at t=20
+    with_leader = _joint_run(_joint_scene([follower, leader], T, pres), p)[0]
+    alone = _joint_run(_joint_scene([follower], T), p)[0]
+    assert with_leader[0, -1] < alone[0, -1] - 1.0
+
+
+def test_joint_exit_holds_position_and_is_scored():
+    """A vehicle crossing the exit line is retired, and frames where its twin is
+    still present carry the held exit position rather than NaN."""
+    from iam_calib.calibrate_joint import run_scene
+    p = default_params(); T = 400
+    sc = _joint_scene([(100.0, 4.0, 12.0, 4.0, 1.7)], T); sc["x_exit_c"] = 110.0
+    P = np.array([[p[k] for k in PARAM_ORDER_]])
+    sx, _, svx, _ = run_scene(sc, P, {"car": 0}, RoadConfig(enabled=True, y_left=8.9, y_right=0.0),
+                              return_trunc=True)
+    assert np.isfinite(sx).all()
+    held = sx[0, -1]
+    assert held - 0.5 * 4.0 >= 110.0 and held < 125.0
+    assert sx[0, -1] == sx[0, -50]                    # frozen once it has left

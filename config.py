@@ -48,7 +48,13 @@ class ParamSpec:
 
 PARAM_SPECS: List[ParamSpec] = [
     # --- underlying IDM ---
-    ParamSpec("v0",         12.0,  1.0,  35.0, False, "idm"),   # desired speed [m/s]
+    # Desired speed. Default and bounds are anchored to this corridor: the
+    # free-flow 85th percentile (lowest-density decile) is 8.0-13.2 m/s by
+    # class and the fastest frame anywhere is 21.8 m/s, so a 35 m/s ceiling
+    # just gave the optimiser somewhere meaningless to park a weakly
+    # identified parameter. calibrate_joint seeds v0 per class from that
+    # percentile rather than starting every class at the same value.
+    ParamSpec("v0",         10.0,  2.0,  20.0, False, "idm"),   # desired speed [m/s]
     ParamSpec("T",           1.2,  0.2,   4.0, False, "idm"),   # time gap [s]
     ParamSpec("s0",          1.5,  0.1,   6.0, False, "idm"),   # min gap [m]
     ParamSpec("a",           1.0,  0.2,   4.0, False, "idm"),   # max accel [m/s^2]
@@ -65,9 +71,48 @@ PARAM_SPECS: List[ParamSpec] = [
     ParamSpec("accLatBRef",  4.0,  0.5,  10.0, False, "boundary"),
     ParamSpec("s0yB",        0.1,  0.02,  1.0, True,  "boundary"),
     ParamSpec("s0yLatB",     0.1,  0.02,  1.0, True,  "boundary"),
+    # --- constant lateral bias acceleration (JS: accBiasRight*) ---
+    # Our frame: y positive = LEFT, so positive = pushed left. The JS counts
+    # right as positive: sim_bicycles_IAM.js has truck +0.8 (right), bike 0,
+    # cars 0, i.e. truck = -0.8 here. Default 0; fitted per vehicle, pooled
+    # per class like every other parameter.
+    ParamSpec("accBiasLat",  0.0, -1.5,   1.5, False, "bias"),
+    # --- IDM acceleration exponent ---
+    # Fixed at 4 (the IDM default) unless a run fixes or frees it; external
+    # IDM calibrations often report it, so it can be imported with the rest.
+    ParamSpec("delta",       4.0,  3.0,   6.0, False, "idm"),
 ]
 
 SPEC_BY_NAME: Dict[str, ParamSpec] = {p.name: p for p in PARAM_SPECS}
+
+# Search boxes grounded in this dataset and in what drivers can do (a run opts
+# in with --bounds realistic). From the measured traffic, by class: positive
+# acceleration p99 0.7-1.3 m/s^2, braking p99 1.4-2.0, standstill gap median
+# 1.0-2.3 m, moving time headway p5 0.33-1.6 s, lateral speed p99 0.1-1.0 m/s,
+# lateral acceleration p99 0.04-0.50 m/s^2, free-flow p85 speed 8-13 m/s.
+# Widths stop at the precision of smoothed video tracks, not at 2 cm.
+# (lo, hi, log)
+REALISTIC_BOUNDS: Dict[str, Tuple[float, float, bool]] = {
+    "v0": (5.0, 25.0, False), "T": (0.2, 3.0, False), "s0": (0.2, 4.0, False),
+    "a": (0.3, 3.0, False), "b": (0.5, 3.0, False), "delta": (3.0, 6.0, False),
+    "s0y": (0.1, 2.0, True), "s0yLat": (0.1, 2.0, True),
+    "sensLat": (0.01, 2.0, True), "tauLatOVM": (0.2, 5.0, True),
+    "pushLong": (0.0, 0.6, False), "pushLat": (0.0, 0.6, False),
+    "accBiasLat": (-0.2, 0.2, False),
+    "accLongBRef": (0.0, 1.0, False), "accLatBRef": (0.1, 2.0, False),
+    "s0yB": (0.05, 1.0, True), "s0yLatB": (0.05, 1.0, True),
+}
+
+# Smallest difference that means anything for a driver or for this data. The
+# search itself stays continuous (a stepped objective would stall CMA-ES);
+# these are the steps of sensitivity profiles and the precision to report.
+# A value ending in "%" is a relative step for a log-scaled parameter.
+GRANULARITY: Dict[str, str] = {
+    "v0": "0.5", "T": "0.1", "s0": "0.1", "a": "0.1", "b": "0.1", "delta": "0.1",
+    "s0y": "0.05", "s0yLat": "0.05", "sensLat": "10%", "tauLatOVM": "0.1",
+    "pushLong": "0.05", "pushLat": "0.05", "accBiasLat": "0.01",
+    "accLongBRef": "0.05", "accLatBRef": "0.1", "s0yB": "0.05", "s0yLatB": "0.05",
+}
 
 # Which parameters CMA-ES actually searches. Everything else is held at
 # `default` (or at a value you pass in `fixed`).
@@ -79,11 +124,13 @@ FREE_PARAMS: Tuple[str, ...] = (
     "v0", "T", "s0", "a", "b",
     "s0y", "s0yLat", "sensLat", "tauLatOVM",
     "pushLong", "pushLat",
+    "accBiasLat",
 )
 
 # Staged calibration: longitudinal first, then lateral with longitudinal frozen.
 STAGE_LONGITUDINAL: Tuple[str, ...] = ("v0", "T", "s0", "a", "b", "s0y", "pushLong")
-STAGE_LATERAL: Tuple[str, ...] = ("s0yLat", "sensLat", "tauLatOVM", "pushLat")
+STAGE_LATERAL: Tuple[str, ...] = ("s0yLat", "sensLat", "tauLatOVM", "pushLat",
+                                  "accBiasLat")
 
 
 # ----------------------------------------------------------------------------
@@ -93,15 +140,67 @@ STAGE_LATERAL: Tuple[str, ...] = ("s0yLat", "sensLat", "tauLatOVM", "pushLat")
 class ModelConstants:
     bmax: float = 9.0                 # max IDM deceleration [m/s^2] (paper: 9)
     longParReductFactor: float = 0.2  # long. force reduction when driving parallel
-    bIntCrit: float = 0.02            # threshold [m/s^2] for counting a neighbour
-    smaxfollow: float = 30.0          # max gap [m] for a follower to push
+    # road.js calcAccelerationsOfVehicle: bIntCrit=0.1; smaxfollow=s0 where s0
+    # is the GLOBAL 0.5 m of sim_bicycles_IAM.js (not the calibrated s0).
+    bIntCrit: float = 0.1             # threshold [m/s^2] for counting a neighbour
+    smaxfollow: float = 0.5           # max gap [m] for a follower to push
+    cool: float = 0.99                # ACC blend weight (0 => plain IDM)
+    use_narrow: bool = True           # leader-near-boundary lateral override
+    use_clamp: bool = True            # lateral-speed heading-angle clamp
+    dvdumax: float = 0.3              # max tan(heading angle to road axis)
+    dotdvdumax: float = 0.3           # max change rate of that angle [1/s]
     accLatIntMaxFactor: float = 4.0   # accLatIntMax = factor * b
     accLatBMax: float = 20.0          # clamp on boundary lateral accel
     useSeveralLeaders: bool = False   # False => Eq.(7) min/max form (JS default)
     v0max: float = 20.0               # reference speed used in boundary scaling
 
 
-MODEL_CONSTANTS = ModelConstants()
+def _ablation_overrides() -> dict:
+    """
+    Ablation switches for attributing a change in fit to one model change.
+    Set env IAM_ABLATE to a comma list of: noacc (plain IDM), nonarrow (no
+    too-narrow-boundary override), noclamp (no heading-angle clamp),
+    oldfollow (bIntCrit=0.02, smaxfollow=30 as in the first version of this
+    port), alloff (all four). Worker processes inherit the environment.
+    """
+    import os
+    flags = {f.strip() for f in os.environ.get("IAM_ABLATE", "").split(",") if f.strip()}
+    if "alloff" in flags:
+        flags |= {"noacc", "nonarrow", "noclamp", "oldfollow"}
+    o = {}
+    if "noacc" in flags: o["cool"] = 0.0
+    if "nonarrow" in flags: o["use_narrow"] = False
+    if "noclamp" in flags: o["use_clamp"] = False
+    if "oldfollow" in flags: o.update(bIntCrit=0.02, smaxfollow=30.0)
+    return o
+
+
+MODEL_CONSTANTS = ModelConstants(**_ablation_overrides())
+
+
+def _widen_lateral_bounds() -> None:
+    """
+    env IAM_WIDE_LAT=1: widen the two bounds the search piles up against.
+
+    The effective lateral interaction gain is sensLat/tauLatOVM. On D3F1 the
+    optimiser drives sensLat to its FLOOR (21% of vehicles) and tauLatOVM to
+    its CEILING (33%) -- both directions mean "make the lateral interaction
+    weaker", i.e. the bounds are binding and the fitted gain is censored.
+    This lets it go further, to test whether the interaction term is simply
+    too strong or genuinely contributes nothing.
+    """
+    import os
+    if os.environ.get("IAM_WIDE_LAT", "") not in ("1", "true", "yes"):
+        return
+    wider = {"sensLat": (0.002, 6.0), "tauLatOVM": (0.15, 30.0)}
+    for i, sp in enumerate(PARAM_SPECS):
+        if sp.name in wider:
+            lo, hi = wider[sp.name]
+            PARAM_SPECS[i] = ParamSpec(sp.name, sp.default, lo, hi, sp.log, sp.group)
+            SPEC_BY_NAME[sp.name] = PARAM_SPECS[i]
+
+
+_widen_lateral_bounds()
 
 
 # ----------------------------------------------------------------------------

@@ -1,0 +1,22 @@
+\begin{tabular}{@{}llllll@{}}\toprule
+parameter & unit & search box & scale & start & granularity\\\midrule
+\multicolumn{6}{@{}l}{\emph{IDM (car-following core)}}\\
+$v_0$ & m/s & [5, 25] & linear & per class$^{a}$ & 0.5 m/s\\
+$T$ & s & [0.2, 3] & linear & 1.2 & 0.1 s\\
+$s_0$ & m & [0.2, 4] & linear & 1.5 & 0.1 m\\
+$a$ & m/s$^2$ & [0.3, 3] & linear & 1 & 0.1 m/s$^2$\\
+$b$ & m/s$^2$ & [0.5, 3] & linear & 1.5 & 0.1 m/s$^2$\\
+$\delta$ & -- & [3, 6] & linear & 4 & 0.1 \\
+\multicolumn{6}{@{}l}{\emph{IAM (lateral, anisotropy, bias, road edge)}}\\
+$s_{0y}$ & m & [0.1, 2] & log & 0.1 & 0.05 m\\
+$s_{0y,\mathrm{lat}}$ & m & [0.1, 2] & log & 0.15 & 0.05 m\\
+$\sigma$ & s & [0.01, 2] & log & 1 & 10\,\%\\
+$\tau$ & s & [0.2, 5] & log & 1 & 0.1 s\\
+$\lambda_\parallel$ & -- & [0, 0.6] & linear & 0.1 & 0.05 \\
+$\lambda_\perp$ & -- & [0, 0.6] & linear & 0.1 & 0.05 \\
+$\beta$ & m/s$^2$ & [-0.2, 0.2] & linear & 0 & 0.01 m/s$^2$\\
+$f_B$ & m/s$^2$ & [0, 1] & linear & 0.2 & 0.05 m/s$^2$\\
+$g_B$ & m/s$^2$ & [0.1, 2] & linear & 2 & 0.1 m/s$^2$\\
+$s_{0y,B}$ & m & [0.05, 1] & log & 0.1 & 0.05 m\\
+$s_{0y,\mathrm{lat}B}$ & m & [0.05, 1] & log & 0.1 & 0.05 m\\
+\bottomrule\end{tabular}

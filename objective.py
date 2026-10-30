@@ -16,6 +16,7 @@ from typing import Dict, Tuple
 
 import numpy as np
 
+from .config import MODEL_CONSTANTS as C
 from .config import ObjectiveConfig, RoadConfig
 from .data import VehicleWindow
 from .model import accelerations, idm_acc_free
@@ -29,29 +30,58 @@ def simulate(win: VehicleWindow, p: Dict[str, float], road: RoadConfig,
 
     Terminates early if the ego diverges past the configured error bounds;
     `n_valid_steps` reports how far it got so the objective can penalise.
+
+    Integration follows road.updateSpeedPositions: speeds update first, the
+    lateral speed is then restricted via the (rate-limited) heading angle
+    dvdu = vy/vx, and positions use the trapezoid of old and new speed.
+    Replicates one quirk deliberately: the stored dvdu is only moved when the
+    new value differs by more than dotdvdumax*dt, so very small lateral speeds
+    are clamped to ~0.
     """
     T, dt = win.n_steps, win.dt
     x = np.empty(T); y = np.empty(T); vx = np.empty(T); vy = np.empty(T)
     x[0], y[0], vx[0], vy[0] = win.x[0], win.y[0], win.vx[0], win.vy[0]
     reset_every = int(round(ocfg.reset_s / dt)) if ocfg.reset_s > 0 else 0
 
+    a_prev = win.ax[0]                      # ego's previous-step acceleration
+    dvdu = vy[0] / max(vx[0], 1e-4)         # stored heading angle (tan)
+
     for i in range(T - 1):
         if reset_every and i > 0 and i % reset_every == 0:
             x[i], y[i] = win.x[i], win.y[i]
             vx[i], vy[i] = win.vx[i], win.vy[i]
+            a_prev = win.ax[i]
+            dvdu = vy[i] / max(vx[i], 1e-4)
         ax, ay = accelerations(
             x[i], y[i], vx[i], vy[i],
             win.nb_x[i], win.nb_y[i], win.nb_vx[i], win.nb_vy[i],
-            win.nb_L[i], win.nb_W[i], win.valid[i],
-            win.L, win.W, p, road,
+            win.nb_ax[i], win.nb_L[i], win.nb_W[i], win.valid[i],
+            win.L, win.W, p, road, a_prev,
         )
-        # ballistic update: second order in position, first order in velocity
+        a_prev = ax
+
         vx_new = vx[i] + ax * dt
         vy_new = vy[i] + ay * dt
-        x[i + 1] = x[i] + vx[i] * dt + 0.5 * ax * dt * dt
-        y[i + 1] = y[i] + vy[i] * dt + 0.5 * ay * dt * dt
-        # no reversing: vehicles are directed flow
-        vx[i + 1] = max(0.0, vx_new)
+
+        if C.use_clamp:
+            dvdu_new = vy_new / max(vx_new, 1e-4)
+            if abs(dvdu_new - dvdu) > dt * C.dotdvdumax:
+                dvdu += (1.0 if dvdu_new - dvdu > 0 else -1.0) * C.dotdvdumax * dt
+            dvdu = max(-C.dvdumax, min(C.dvdumax, dvdu))
+            vy_max = abs(dvdu * vx_new)
+            vy_new = max(-vy_max, min(vy_max, vy_new))
+
+        dy_step = 0.5 * (vy[i] + vy_new) * dt
+        if vx_new < -1e-6:                  # stopped within the step
+            dx_step = -0.5 * vx[i] * vx[i] / ax
+            vx_new = 0.0
+        else:
+            dx_step = 0.5 * (vx[i] + vx_new) * dt
+            vx_new = max(0.0, vx_new)       # no reversing: directed flow
+
+        x[i + 1] = x[i] + dx_step
+        y[i + 1] = y[i] + dy_step
+        vx[i + 1] = vx_new
         vy[i + 1] = vy_new
 
         if (abs(x[i + 1] - win.x[i + 1]) > ocfg.max_x_error or
@@ -134,8 +164,8 @@ def local_objective(win: VehicleWindow, p: Dict[str, float], road: RoadConfig
         ax_sim[i], ay_sim[i] = accelerations(
             win.x[i], win.y[i], win.vx[i], win.vy[i],
             win.nb_x[i], win.nb_y[i], win.nb_vx[i], win.nb_vy[i],
-            win.nb_L[i], win.nb_W[i], win.valid[i],
-            win.L, win.W, p, road,
+            win.nb_ax[i], win.nb_L[i], win.nb_W[i], win.valid[i],
+            win.L, win.W, p, road, win.ax[i],
         )
     return float(np.sqrt(np.mean((ax_sim - ax_obs) ** 2)) +
                  np.sqrt(np.mean((ay_sim - ay_obs) ** 2)))
@@ -161,6 +191,8 @@ def make_fast_gof(win: VehicleWindow, road: RoadConfig, ocfg: ObjectiveConfig):
     ny = np.ascontiguousarray(win.nb_y, dtype=np.float64)
     nvx = np.ascontiguousarray(win.nb_vx, dtype=np.float64)
     nvy = np.ascontiguousarray(win.nb_vy, dtype=np.float64)
+    nax = np.ascontiguousarray(win.nb_ax, dtype=np.float64)
+    oax = np.ascontiguousarray(win.ax, dtype=np.float64)
     nL = np.ascontiguousarray(win.nb_L, dtype=np.float64)
     nW = np.ascontiguousarray(win.nb_W, dtype=np.float64)
     vd = np.ascontiguousarray(win.valid)
@@ -170,10 +202,12 @@ def make_fast_gof(win: VehicleWindow, road: RoadConfig, ocfg: ObjectiveConfig):
 
     def f(pvec: np.ndarray) -> float:
         return float(gof_core(
-            ox, oy, ovx, ovy, nx, ny, nvx, nvy, nL, nW, vd,
+            ox, oy, ovx, ovy, oax, nx, ny, nvx, nvy, nax, nL, nW, vd,
             win.L, win.W, np.ascontiguousarray(pvec, dtype=np.float64), win.dt,
             C.bmax, C.longParReductFactor, C.bIntCrit, C.smaxfollow,
             C.accLatIntMaxFactor, C.useSeveralLeaders, C.accLatBMax, C.v0max,
+            C.dvdumax, C.dotdvdumax, C.cool, int(C.use_narrow),
+            int(C.use_clamp),
             road_on, road.y_left, road.y_right,
             ocfg.max_x_error, ocfg.max_y_error, reset_every, ocfg.penalty,
             ocfg.w_x, ocfg.w_y, ocfg.w_v, ocfg.x_scale, ocfg.y_scale))

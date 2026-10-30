@@ -1,0 +1,149 @@
+{
+ "scene_s": 30.0,
+ "multi": false,
+ "whole_record": true,
+ "exit_signal": true,
+ "train_frac": 0.7,
+ "max_blocks": 1,
+ "split_seed": 1,
+ "seed": 1,
+ "maxfevals": 1000000,
+ "overrides": {
+  "v0": [
+   5.0,
+   25.0,
+   false
+  ],
+  "T": [
+   0.2,
+   3.0,
+   false
+  ],
+  "s0": [
+   0.2,
+   4.0,
+   false
+  ],
+  "a": [
+   0.3,
+   3.0,
+   false
+  ],
+  "b": [
+   0.5,
+   3.0,
+   false
+  ],
+  "delta": [
+   3.0,
+   6.0,
+   false
+  ],
+  "s0y": [
+   0.1,
+   2.0,
+   true
+  ],
+  "s0yLat": [
+   0.1,
+   2.0,
+   true
+  ],
+  "sensLat": [
+   0.01,
+   2.0,
+   true
+  ],
+  "tauLatOVM": [
+   0.2,
+   5.0,
+   true
+  ],
+  "pushLong": [
+   0.0,
+   0.6,
+   false
+  ],
+  "pushLat": [
+   0.0,
+   0.6,
+   false
+  ],
+  "accBiasLat": [
+   -0.2,
+   0.2,
+   false
+  ],
+  "accLongBRef": [
+   0.0,
+   1.0,
+   false
+  ],
+  "accLatBRef": [
+   0.1,
+   2.0,
+   false
+  ],
+  "s0yB": [
+   0.05,
+   1.0,
+   true
+  ],
+  "s0yLatB": [
+   0.05,
+   1.0,
+   true
+  ]
+ },
+ "fixed_v0": null,
+ "fixed": {},
+ "max_minutes": 120.0,
+ "free": [
+  "v0",
+  "T",
+  "s0",
+  "a",
+  "b",
+  "s0y",
+  "s0yLat",
+  "sensLat",
+  "tauLatOVM",
+  "pushLong",
+  "pushLat",
+  "accBiasLat",
+  "accLongBRef",
+  "accLatBRef",
+  "s0yB",
+  "s0yLatB"
+ ],
+ "dims": {
+  "auto": [
+   2.7,
+   1.4
+  ],
+  "bike": [
+   1.8,
+   0.65
+  ],
+  "car": [
+   4.0,
+   1.7
+  ],
+  "lcv": [
+   4.5,
+   1.75
+  ],
+  "truck": [
+   8.5,
+   2.4
+  ],
+  "multiaxle": [
+   12.0,
+   2.5
+  ],
+  "trailer": [
+   15.5,
+   2.5
+  ]
+ }
+}

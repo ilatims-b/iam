@@ -36,10 +36,12 @@ class VehicleWindow:
     y: np.ndarray          # (T,) observed lateral position [m]
     vx: np.ndarray         # (T,) observed longitudinal speed [m/s]
     vy: np.ndarray         # (T,) observed lateral speed [m/s]
+    ax: np.ndarray         # (T,) observed longitudinal acceleration [m/s^2]
     nb_x: np.ndarray       # (T, K)
     nb_y: np.ndarray
     nb_vx: np.ndarray
     nb_vy: np.ndarray
+    nb_ax: np.ndarray      # neighbours' measured long. acceleration (a_l of ACC)
     nb_L: np.ndarray
     nb_W: np.ndarray
     valid: np.ndarray      # (T, K) bool
@@ -58,7 +60,7 @@ def load_frame(path: str, cfg: DataConfig,
                usecols: Optional[List[str]] = None) -> pd.DataFrame:
     """Read the CSV and validate that the expected columns exist."""
     needed = [cfg.col_id, cfg.col_class, cfg.col_time, cfg.col_x, cfg.col_y,
-              cfg.col_vx, cfg.col_vy]
+              cfg.col_vx, cfg.col_vy, cfg.col_ax]
     df = pd.read_csv(path, usecols=usecols)
     missing = [c for c in needed if c not in df.columns]
     if missing:
@@ -98,8 +100,8 @@ def build_windows(df: pd.DataFrame, pcfg: PipelineConfig,
     dims = pcfg.vehicle_dims
 
     d = df[[cfg.col_id, cfg.col_class, cfg.col_time, cfg.col_x, cfg.col_y,
-            cfg.col_vx, cfg.col_vy]].copy()
-    d.columns = ["vid", "cls", "t", "x", "y", "vx", "vy"]
+            cfg.col_vx, cfg.col_vy, cfg.col_ax]].copy()
+    d.columns = ["vid", "cls", "t", "x", "y", "vx", "vy", "ax"]
 
     # discrete frame index -- makes the neighbour join exact
     t0 = d["t"].min()
@@ -123,7 +125,7 @@ def build_windows(df: pd.DataFrame, pcfg: PipelineConfig,
     frame_lookup = {int(f): (int(s), int(e))
                     for f, s, e in zip(uniq_frames, frame_start, frame_end)}
 
-    arr = {c: d[c].to_numpy() for c in ("x", "y", "vx", "vy", "L", "W")}
+    arr = {c: d[c].to_numpy() for c in ("x", "y", "vx", "vy", "ax", "L", "W")}
     vid_arr = d["vid"].to_numpy()
 
     min_steps = int(round(cfg.min_window_s / cfg.dt))
@@ -158,12 +160,13 @@ def build_windows(df: pd.DataFrame, pcfg: PipelineConfig,
         ey = sub["y"].to_numpy(float)
         evx = sub["vx"].to_numpy(float)
         evy = sub["vy"].to_numpy(float)
+        eax = sub["ax"].to_numpy(float)
         cls = str(sub["cls"].iloc[0])
         Lego = float(sub["L"].iloc[0])
         Wego = float(sub["W"].iloc[0])
 
         nb = {n: np.zeros((T, K), dtype=np.float64)
-              for n in ("x", "y", "vx", "vy", "L", "W")}
+              for n in ("x", "y", "vx", "vy", "ax", "L", "W")}
         valid = np.zeros((T, K), dtype=bool)
         overflow = 0
 
@@ -189,7 +192,7 @@ def build_windows(df: pd.DataFrame, pcfg: PipelineConfig,
                 idx = idx[order]
             n = idx.size
             gidx = a + idx
-            for name in ("x", "y", "vx", "vy", "L", "W"):
+            for name in ("x", "y", "vx", "vy", "ax", "L", "W"):
                 nb[name][i, :n] = arr[name][gidx]
             valid[i, :n] = True
 
@@ -201,9 +204,9 @@ def build_windows(df: pd.DataFrame, pcfg: PipelineConfig,
         windows.append(VehicleWindow(
             vid=vid, vclass=cls, L=Lego, W=Wego, dt=cfg.dt,
             t=np.arange(T) * cfg.dt,
-            x=ex, y=ey, vx=evx, vy=evy,
+            x=ex, y=ey, vx=evx, vy=evy, ax=eax,
             nb_x=nb["x"], nb_y=nb["y"], nb_vx=nb["vx"], nb_vy=nb["vy"],
-            nb_L=nb["L"], nb_W=nb["W"], valid=valid,
+            nb_ax=nb["ax"], nb_L=nb["L"], nb_W=nb["W"], valid=valid,
         ))
 
         if pcfg.max_vehicles and len(windows) >= pcfg.max_vehicles:

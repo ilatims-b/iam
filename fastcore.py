@@ -12,7 +12,8 @@ Speedup is roughly 100x, which is the difference between a 15-hour run and a
 Parameter vector layout (PARAM_ORDER, must match config.PARAM_SPECS order):
     0 v0   1 T   2 s0   3 a   4 b
     5 s0y  6 s0yLat  7 sensLat  8 tauLatOVM  9 pushLong  10 pushLat
-   11 accLongBRef  12 accLatBRef  13 s0yB  14 s0yLatB
+   11 accLongBRef  12 accLatBRef  13 s0yB  14 s0yLatB  15 accBiasLat
+   16 delta (IDM acceleration exponent)
 """
 
 from typing import Dict, Sequence
@@ -35,6 +36,7 @@ PARAM_ORDER = (
     "v0", "T", "s0", "a", "b",
     "s0y", "s0yLat", "sensLat", "tauLatOVM", "pushLong", "pushLat",
     "accLongBRef", "accLatBRef", "s0yB", "s0yLatB",
+    "accBiasLat", "delta",
 )
 PARAM_INDEX = {n: i for i, n in enumerate(PARAM_ORDER)}
 
@@ -57,12 +59,65 @@ def _idm_acc_int(s, v, vl, a, b, s0, T, bmax):
 
 
 @njit(cache=True, fastmath=False)
-def _idm_acc_free(v, v0, a):
+def _idm_acc_free(v, v0, a, delta=4.0):
     v0e = v0 if v0 > 0.01 else 0.01
     if v < v0e:
         r = v / v0e
-        return a * (1.0 - r * r * r * r)
+        rd = r * r * r * r if delta == 4.0 else r ** delta
+        return a * (1.0 - rd)
     return a * (1.0 - v / v0e)
+
+
+@njit(cache=True, fastmath=False)
+def _acc_int(s, v, vl, al, a, b, s0, T, v0, bmax, cool, delta=4.0):
+    """models.js ACC.calcAccInt; identical to model.acc_int."""
+    sstar = s0 + max(0.0, v * T + 0.5 * v * (v - vl) / np.sqrt(a * b))
+    acc_free = _idm_acc_free(v, v0, a, delta)
+    den_s = s if s > 0.1 * s0 else 0.1 * s0
+    acc_idm = acc_free - a * (sstar / den_s) * (sstar / den_s)
+
+    den = vl * vl - 2.0 * s * al
+    if vl * (v - vl) < -2.0 * s * al and abs(den) > 1e-12:
+        acc_cah = v * v * al / den
+    else:
+        sm = s if s > 0.1 else 0.1
+        acc_cah = al - (v - vl) * (v - vl) / (2.0 * sm) * (1.0 if v > vl else 0.0)
+    if acc_cah > a:
+        acc_cah = a
+
+    if acc_idm > acc_cah:
+        acc_mix = acc_idm
+    else:
+        z = (acc_idm - acc_cah) / b
+        z = 50.0 if z > 50.0 else (-50.0 if z < -50.0 else z)
+        acc_mix = acc_cah + b * np.tanh(z)
+    acc_acc = cool * acc_mix + (1.0 - cool) * acc_idm
+    out = acc_acc - acc_free
+    return out if out > -bmax else -bmax
+
+
+@njit(cache=True, fastmath=False)
+def _lat_alpha(dy, Wavg, s0yLat, y_sub, y_lead, W_sub, W_lead, s0yLatB,
+               road_on, y_left, y_right):
+    """Normalised lateral desire incl. models.js too-narrow-boundary override.
+    dy = y_lead - y_sub; our frame: +y = left."""
+    sgn = -1.0 if dy < 0.0 else 1.0
+    overlap = abs(dy) < Wavg
+    if overlap:
+        alpha = -sgn * (abs(dy) / Wavg)
+    else:
+        alpha = -sgn * np.exp(-(abs(dy) - Wavg) / s0yLat)
+    if overlap and road_on != 0:
+        gap_right = (y_lead - y_right) - 0.5 * W_lead
+        gap_left = (y_left - y_lead) - 0.5 * W_lead
+        narrow_r = gap_right < W_sub + s0yLatB
+        narrow_l = gap_left < W_sub + s0yLatB
+        if not (narrow_r and narrow_l):
+            if narrow_r and y_sub < y_lead:
+                alpha = 1.0
+            if narrow_l and y_sub > y_lead:
+                alpha = -1.0
+    return alpha
 
 
 @njit(cache=True, fastmath=False)
@@ -89,16 +144,17 @@ def _boundary(y, vx, W_ego, p, road_on, y_left, y_right, accLatBMax, v0max):
 
 
 @njit(cache=True, fastmath=False)
-def _accel(x, y, vx, vy, nb_x, nb_y, nb_vx, nb_vy, nb_L, nb_W, valid,
-           L_ego, W_ego, p,
+def _accel(x, y, vx, vy, nb_x, nb_y, nb_vx, nb_vy, nb_ax, nb_L, nb_W, valid,
+           a_ego, L_ego, W_ego, p,
            bmax, longPar, bIntCrit, smaxfollow, accLatIntMaxFactor,
-           useSeveralLeaders, accLatBMax, v0max,
+           useSeveralLeaders, accLatBMax, v0max, cool, narrow_on,
            road_on, y_left, y_right):
     v0 = p[0]; T = p[1]; s0 = p[2]; a = p[3]; b = p[4]
     s0y = p[5]; s0yLat = p[6]; sensLat = p[7]; tau = p[8]
-    pushLong = p[9]; pushLat = p[10]
+    pushLong = p[9]; pushLat = p[10]; s0yLatB = p[14]; bias = p[15]
+    delta = p[16]
 
-    acc_long = _idm_acc_free(vx, v0, a)
+    acc_long = _idm_acc_free(vx, v0, a, delta)
     acc_lat = -vy / tau
 
     s0y_big = s0y if s0y > s0yLat else s0yLat
@@ -120,6 +176,7 @@ def _accel(x, y, vx, vy, nb_x, nb_y, nb_vx, nb_vy, nb_L, nb_W, valid,
         Ll = nb_L[k]
         vxl = nb_vx[k]
         vyl = nb_vy[k]
+        axl = nb_ax[k]
 
         if dx >= 0.0:
             # ---- candidate leader ----
@@ -127,7 +184,7 @@ def _accel(x, y, vx, vy, nb_x, nb_y, nb_vx, nb_vy, nb_L, nb_W, valid,
             if sx < 0.0:
                 sx = 0.0
             sy = abs(dy) - Wavg
-            cf = _idm_acc_int(sx, vx, vxl, a, b, s0, T, bmax)
+            cf = _acc_int(sx, vx, vxl, axl, a, b, s0, T, v0, bmax, cool, delta)
 
             al_sel = np.exp(-sy / s0y_big)
             if al_sel > 1.0:
@@ -147,11 +204,8 @@ def _accel(x, y, vx, vy, nb_x, nb_y, nb_vx, nb_vy, nb_L, nb_W, valid,
             sum_lead += f
 
             # lateral force (calcAccLatInt, isPushing = False)
-            sgn = -1.0 if dy < 0.0 else 1.0
-            if abs(dy) < Wavg:
-                alpha = -sgn * (abs(dy) / Wavg)
-            else:
-                alpha = -sgn * np.exp(-(abs(dy) - Wavg) / s0yLat)
+            alpha = _lat_alpha(dy, Wavg, s0yLat, y, nb_y[k], W_ego, nb_W[k],
+                               s0yLatB, narrow_on, y_left, y_right)
             g = (-sensLat * alpha * cf) / tau
             if g > lat_lim:
                 g = lat_lim
@@ -169,7 +223,7 @@ def _accel(x, y, vx, vy, nb_x, nb_y, nb_vx, nb_vy, nb_L, nb_W, valid,
             if sxb < 0.0:
                 sxb = 0.0
             syb = abs(dy) - Wavg
-            cfb = _idm_acc_int(sxb, vxl, vx, a, b, s0, T, bmax)
+            cfb = _acc_int(sxb, vxl, vx, a_ego, a, b, s0, T, v0, bmax, cool, delta)
 
             al_sel = np.exp(-syb / s0y_big)
             if al_sel > 1.0:
@@ -188,11 +242,8 @@ def _accel(x, y, vx, vy, nb_x, nb_y, nb_vx, nb_vy, nb_L, nb_W, valid,
 
             # lateral push (isPushing = True): zero if lateral gap opening
             dyb = -dy
-            sgn = -1.0 if dyb < 0.0 else 1.0
-            if abs(dyb) < Wavg:
-                alpha = -sgn * (abs(dyb) / Wavg)
-            else:
-                alpha = -sgn * np.exp(-(abs(dyb) - Wavg) / s0yLat)
+            alpha = _lat_alpha(dyb, Wavg, s0yLat, nb_y[k], y, nb_W[k], W_ego,
+                               s0yLatB, narrow_on, y_left, y_right)
             g = (-sensLat * alpha * cfb) / tau
             if dyb * (vy - vyl) > 0.0:
                 g = 0.0
@@ -210,19 +261,21 @@ def _accel(x, y, vx, vy, nb_x, nb_y, nb_vx, nb_vy, nb_L, nb_W, valid,
 
     bl, bt = _boundary(y, vx, W_ego, p, road_on, y_left, y_right,
                        accLatBMax, v0max)
-    return acc_long + bl, acc_lat + bt
+    return acc_long + bl, acc_lat + bt + bias
 
 
 @njit(cache=True, fastmath=False)
-def simulate_core(obs_x, obs_y, obs_vx, obs_vy,
-                  nb_x, nb_y, nb_vx, nb_vy, nb_L, nb_W, valid,
+def simulate_core(obs_x, obs_y, obs_vx, obs_vy, obs_ax,
+                  nb_x, nb_y, nb_vx, nb_vy, nb_ax, nb_L, nb_W, valid,
                   L_ego, W_ego, p, dt,
                   bmax, longPar, bIntCrit, smaxfollow, accLatIntMaxFactor,
-                  useSeveralLeaders, accLatBMax, v0max,
+                  useSeveralLeaders, accLatBMax, v0max, dvdumax, dotdvdumax,
+                  cool, narrow_on, clamp_on,
                   road_on, y_left, y_right,
                   max_x_err, max_y_err, reset_every):
     """
-    Ballistic integration of the ego trajectory. Returns (x, y, vx, vy, n).
+    JS-style integration of the ego trajectory (see objective.simulate).
+    Returns (x, y, vx, vy, n).
 
     `reset_every` > 0 re-initialises the ego state from the measurement every
     that many steps, splitting the window into independent sub-simulations.
@@ -238,24 +291,52 @@ def simulate_core(obs_x, obs_y, obs_vx, obs_vy,
     T = obs_x.shape[0]
     x = np.empty(T); y = np.empty(T); vx = np.empty(T); vy = np.empty(T)
     x[0] = obs_x[0]; y[0] = obs_y[0]; vx[0] = obs_vx[0]; vy[0] = obs_vy[0]
+    a_prev = obs_ax[0]
+    dvdu = vy[0] / max(vx[0], 1e-4)
 
     for i in range(T - 1):
         if reset_every > 0 and i > 0 and i % reset_every == 0:
             x[i] = obs_x[i]; y[i] = obs_y[i]
             vx[i] = obs_vx[i]; vy[i] = obs_vy[i]
+            a_prev = obs_ax[i]
+            dvdu = vy[i] / max(vx[i], 1e-4)
         ax, ay = _accel(x[i], y[i], vx[i], vy[i],
-                        nb_x[i], nb_y[i], nb_vx[i], nb_vy[i],
-                        nb_L[i], nb_W[i], valid[i],
+                        nb_x[i], nb_y[i], nb_vx[i], nb_vy[i], nb_ax[i],
+                        nb_L[i], nb_W[i], valid[i], a_prev,
                         L_ego, W_ego, p,
                         bmax, longPar, bIntCrit, smaxfollow,
                         accLatIntMaxFactor, useSeveralLeaders,
-                        accLatBMax, v0max, road_on, y_left, y_right)
-        xn = x[i] + vx[i] * dt + 0.5 * ax * dt * dt
-        yn = y[i] + vy[i] * dt + 0.5 * ay * dt * dt
+                        accLatBMax, v0max, cool, narrow_on * road_on,
+                        road_on, y_left, y_right)
+        a_prev = ax
+
         vxn = vx[i] + ax * dt
-        if vxn < 0.0:
-            vxn = 0.0
         vyn = vy[i] + ay * dt
+
+        if clamp_on != 0:
+            dvdu_new = vyn / max(vxn, 1e-4)
+            if abs(dvdu_new - dvdu) > dt * dotdvdumax:
+                dvdu += (1.0 if dvdu_new - dvdu > 0.0 else -1.0) * dotdvdumax * dt
+            if dvdu > dvdumax:
+                dvdu = dvdumax
+            elif dvdu < -dvdumax:
+                dvdu = -dvdumax
+            vy_max = abs(dvdu * vxn)
+            if vyn > vy_max:
+                vyn = vy_max
+            elif vyn < -vy_max:
+                vyn = -vy_max
+
+        dy_step = 0.5 * (vy[i] + vyn) * dt
+        if vxn < -1e-6:
+            dx_step = -0.5 * vx[i] * vx[i] / ax
+            vxn = 0.0
+        else:
+            dx_step = 0.5 * (vx[i] + vxn) * dt
+            if vxn < 0.0:
+                vxn = 0.0
+        xn = x[i] + dx_step
+        yn = y[i] + dy_step
 
         x[i + 1] = xn; y[i + 1] = yn; vx[i + 1] = vxn; vy[i + 1] = vyn
 
@@ -268,21 +349,24 @@ def simulate_core(obs_x, obs_y, obs_vx, obs_vy,
 
 
 @njit(cache=True, fastmath=False)
-def gof_core(obs_x, obs_y, obs_vx, obs_vy,
-             nb_x, nb_y, nb_vx, nb_vy, nb_L, nb_W, valid,
+def gof_core(obs_x, obs_y, obs_vx, obs_vy, obs_ax,
+             nb_x, nb_y, nb_vx, nb_vy, nb_ax, nb_L, nb_W, valid,
              L_ego, W_ego, p, dt,
              bmax, longPar, bIntCrit, smaxfollow, accLatIntMaxFactor,
-             useSeveralLeaders, accLatBMax, v0max,
+             useSeveralLeaders, accLatBMax, v0max, dvdumax, dotdvdumax,
+             cool, narrow_on, clamp_on,
              road_on, y_left, y_right,
              max_x_err, max_y_err, reset_every, penalty,
              w_x, w_y, w_v, x_scale, y_scale):
     """Full objective in one JIT call: no Python-level allocation per eval."""
     x, y, vx, vy, n = simulate_core(
-        obs_x, obs_y, obs_vx, obs_vy,
-        nb_x, nb_y, nb_vx, nb_vy, nb_L, nb_W, valid,
+        obs_x, obs_y, obs_vx, obs_vy, obs_ax,
+        nb_x, nb_y, nb_vx, nb_vy, nb_ax, nb_L, nb_W, valid,
         L_ego, W_ego, p, dt,
         bmax, longPar, bIntCrit, smaxfollow, accLatIntMaxFactor,
-        useSeveralLeaders, accLatBMax, v0max, road_on, y_left, y_right,
+        useSeveralLeaders, accLatBMax, v0max, dvdumax, dotdvdumax,
+        cool, narrow_on, clamp_on,
+        road_on, y_left, y_right,
         max_x_err, max_y_err, reset_every)
 
     T = obs_x.shape[0]

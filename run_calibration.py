@@ -24,6 +24,7 @@ import pandas as pd
 from iam_calib import (CMAConfig, DataConfig, ObjectiveConfig, PipelineConfig,
                        RoadConfig, FREE_PARAMS)
 from iam_calib import (build_windows, calibrate_all, load_frame, summarise)
+from iam_calib.config import dims_for_class
 from iam_calib.diagnostics import (bound_hit_report, identifiability,
                                    pool_by_class, results_frame,
                                    shrink_thin_classes, train_test_split,
@@ -53,8 +54,13 @@ def main() -> int:
     ap.add_argument("--y-scale", type=float, default=0.5,
                     help="lateral error normalisation [m]; the key GoF knob")
     ap.add_argument("--road-width", type=float, default=0.0,
-                    help="enable boundary forces with this width [m], "
-                         "centred on the median of Y_Smt")
+                    help="enable boundary forces with this width [m], centred on "
+                         "the lateral extent actually OCCUPIED by vehicle bodies")
+    ap.add_argument("--road-edges", type=float, nargs=2, default=None,
+                    metavar=("Y_RIGHT", "Y_LEFT"),
+                    help="explicit road edges in the Y_Smt frame; overrides "
+                         "--road-width placement. Prefer this when the geometry "
+                         "is known -- see the body-crossing diagnostic below.")
     ap.add_argument("--train-frac", type=float, default=0.7)
     ap.add_argument("--skip-diagnostics", action="store_true")
     args = ap.parse_args()
@@ -88,15 +94,38 @@ def main() -> int:
     print("\nper-class summary:")
     print(smry.to_string())
 
-    if args.road_width > 0:
-        y_mid = float(df[cfg.data.col_y].median())
-        cfg.road = RoadConfig(enabled=True,
-                              y_left=y_mid + args.road_width / 2,
-                              y_right=y_mid - args.road_width / 2)
+    if args.road_width > 0 or args.road_edges:
+        # Place the edges against the lateral extent the vehicle BODIES occupy,
+        # not the median of the centroids. Centring on the centroid median is
+        # wrong whenever the class mix is laterally segregated (here bikes sit
+        # high, dragging the median up ~1 m), and the cost is severe: past an
+        # edge the lateral restoring force grows LINEARLY and unbounded
+        # (alpha_lat = 1 - sy/s0yLatB), so every body that pokes over a
+        # misplaced edge gets a large spurious push.
+        half_w = df[cfg.data.col_class].map(
+            lambda c: 0.5 * dims_for_class(c, cfg.vehicle_dims)[1])
+        body_lo = float((df[cfg.data.col_y] - half_w).min())
+        body_hi = float((df[cfg.data.col_y] + half_w).max())
+        if args.road_edges:
+            y_right, y_left = sorted(args.road_edges)
+        else:
+            mid = 0.5 * (body_lo + body_hi)
+            y_right, y_left = mid - args.road_width / 2, mid + args.road_width / 2
+        cfg.road = RoadConfig(enabled=True, y_left=y_left, y_right=y_right)
         cfg.free_params = tuple(list(FREE_PARAMS) +
                                 ["accLongBRef", "accLatBRef", "s0yB", "s0yLatB"])
-        print(f"\nboundary forces ON: y in "
-              f"[{cfg.road.y_right:.2f}, {cfg.road.y_left:.2f}]")
+        cross = float((((df[cfg.data.col_y] - half_w) < y_right) |
+                       ((df[cfg.data.col_y] + half_w) > y_left)).mean())
+        print(f"\nboundary forces ON: y in [{y_right:.2f}, {y_left:.2f}] "
+              f"(width {y_left - y_right:.2f} m)")
+        print(f"  vehicle bodies occupy [{body_lo:.2f}, {body_hi:.2f}] "
+              f"(width {body_hi - body_lo:.2f} m)")
+        print(f"  rows whose body crosses an edge: {100 * cross:.1f}%", end="")
+        if cross > 0.05:
+            print("   <-- WARNING: a misplaced edge injects spurious lateral "
+                  "force; pass --road-edges", flush=True)
+        else:
+            print(flush=True)
     else:
         print("\nboundary forces OFF (pass --road-width to enable)")
 
@@ -126,7 +155,7 @@ def main() -> int:
     pooled = pool_by_class(res_df, cfg.free_params)
     pooled_s = shrink_thin_classes(pooled, cfg.free_params)
     pooled_s.to_csv(os.path.join(args.out, "class_params.csv"), index=False)
-    print("\nclass-level parameters (after shrinkage):")
+    print("\nclass-level parameters (thin classes share a similar class):")
     cols = ["vclass", "n_vehicles", "median_fitness"] + list(cfg.free_params)
     print(pooled_s[cols].to_string(index=False, float_format=lambda v: f"{v:.3f}"))
 
