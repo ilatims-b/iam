@@ -27,6 +27,8 @@ from matplotlib.lines import Line2D
 from iam_calib.config import SPEC_BY_NAME, REALISTIC_BOUNDS, GRANULARITY, PARAM_SPECS
 import iam_calib.make_figs as mf
 import iam_calib.make_runs_report as rr
+from iam_calib import calibrate_joint as cj
+from iam_calib.config import PipelineConfig
 
 OUT = "paper_joint/calib_report"; FIG = f"{OUT}/figs"
 FREE = "j12_dims"
@@ -74,12 +76,47 @@ def tab_bounds():
         + body + "\n" r"\bottomrule\end{tabular}" "\n")
 
 
+def constant_velocity(run):
+    """Baseline: each vehicle keeps its measured entry speed, longitudinal and
+    lateral, for its whole time on the section. Scored like the simulation (same
+    vehicles, frames on which the vehicle is present, at least 50 frames): mean
+    capped F and pooled RMSE, for training and held-out vehicles."""
+    rc = json.load(open(f"results/{run}/run_config.json"))
+    cfg = PipelineConfig(); cfg.road.y_right, cfg.road.y_left, cfg.road.enabled = 0.0, 8.9, True
+    cfg.vehicle_dims.update({k: tuple(v) for k, v in rc.get("dims", {}).items()})
+    tr, te, _ = cj.whole_record(pd.read_csv("D3F1_lcl_smtF.csv"), cfg, 1 - rc.get("train_frac", 0.7),
+                                rc.get("split_seed", 1), rc.get("exit_signal", False))
+    out = {}
+    for split, sc_ in (("train", tr), ("test", te)):
+        F, n, ex, ey, ev = [], [], [], [], []
+        for i in range(sc_["X"].shape[0]):
+            m = sc_["present"][i]
+            if m.sum() < 50 or not sc_["score"][i]: continue
+            f = np.where(m)[0]; k0 = f[0]; tt = (f - k0) * sc_["dt"]
+            x = sc_["X"][i, k0] + sc_["VX"][i, k0] * tt
+            y = sc_["Y"][i, k0] + sc_["VY"][i, k0] * tt
+            v = np.full(len(f), sc_["VX"][i, k0])
+            rx = np.sqrt(np.mean((x - sc_["X"][i, f]) ** 2)); ry = np.sqrt(np.mean((y - sc_["Y"][i, f]) ** 2))
+            rv = np.sqrt(np.mean((v - sc_["VX"][i, f]) ** 2))
+            rms = max(np.sqrt(np.mean(sc_["VX"][i, f] ** 2)), 0.5)
+            F.append(min(rx / 2.0 + ry / 0.5 + rv / rms, 60.0)); n.append(len(f))
+            ex.append(rx); ey.append(ry); ev.append(rv)
+        n = np.array(n, float)
+        pool = lambda e: float(np.sqrt(np.sum(n * np.array(e) ** 2) / n.sum()))
+        out[split] = dict(n=len(n), F=float(np.mean(F)), x=pool(ex), y=pool(ey), v=pool(ev))
+    return out
+
+
 def tab_runs(sc):
     rows = []
     for key, run, lab in RUNS:
         a, b = sc[key]["train"]["all"], sc[key]["test"]["all"]
         rows.append(f"{lab} & {g(a['F'])} & {g(a['x'],1)} & {g(a['y'])} & {g(a['v'])} & "
                     f"{g(b['F'])} & {g(b['x'],1)} & {g(b['y'])} & {g(b['v'])}" + r"\\")
+    cv = constant_velocity(FREE); a, b = cv["train"], cv["test"]
+    rows.append(r"\midrule" "\n" f"Constant velocity & {g(a['F'])} & {g(a['x'],1)} & {g(a['y'])} & "
+                f"{g(a['v'])} & {g(b['F'])} & {g(b['x'],1)} & {g(b['y'])} & {g(b['v'])}" + r"\\")
+    json.dump(cv, open(f"{FIG}/baseline_cv.json", "w"), indent=1)
     open(f"{FIG}/tab_runs.tex", "w").write(
         r"\begin{tabular}{@{}l rrrr rrrr@{}}\toprule" "\n"
         r" & \multicolumn{4}{c}{training vehicles (386)} & \multicolumn{4}{c}{held-out vehicles (165)}\\" "\n"
@@ -184,6 +221,38 @@ def lateral_time(rec, dt, stops, out, step=10):
     cb.set_label("longitudinal speed (m/s)", fontsize=6.5); cb.ax.tick_params(labelsize=5.5, length=2)
     fig.supylabel("lateral position from the median kerb (m)", fontsize=7, x=.005)
     fig.savefig(f"{out}/fig_st_y.pdf", bbox_inches="tight", dpi=200); plt.close(fig)
+
+
+def all_spacetime(rec, dt, x0, stops, out, step=10):
+    """One space-time diagram of all vehicles together, measured above and
+    calibrated below, coloured by longitudinal speed: x(t) in fig_all_x.pdf and
+    y(t) in fig_all_y.pdf."""
+    from matplotlib.collections import LineCollection
+    r = rec[rec.frame % step == 0]
+    gm, gs = r[r.pres], r[r.on]
+    norm = plt.Normalize(0, 8)
+    for key, ylab, ylim, name in (("x", "position along the section (m)", (0, mf.SEC), "fig_all_x.pdf"),
+                                  ("y", "lateral position from the median kerb (m)", mf.EDGES, "fig_all_y.pdf")):
+        fig, ax = plt.subplots(2, 1, figsize=(7.1, 6.2), sharex=True, sharey=True)
+        lc = None
+        for a, g, (vk, yk), title in ((ax[0], gm, ("v_m", f"{key}_m"), "measured"),
+                                      (ax[1], gs, ("v_s", f"{key}_s"), "calibrated (all parameters free)")):
+            for p, q in stops:
+                a.axvspan(p, q, color="#C0392B", alpha=.10, lw=0, zorder=0)
+            y = g[yk] - 0.5 * g.L - x0 if key == "x" else g[yk]
+            sg, cv = mf._segments(np.asarray(g.frame * dt), np.asarray(y), np.asarray(g[vk]),
+                                  g.vid.astype(str).values)
+            lc = LineCollection(np.concatenate(sg), cmap="viridis", norm=norm, linewidths=.3,
+                                rasterized=True)
+            lc.set_array(np.concatenate(cv)); a.add_collection(lc)
+            a.set_xlim(0, 781); a.set_ylim(*ylim); a.set_title(title, fontsize=8)
+            a.set_ylabel(ylab, fontsize=7); a.tick_params(length=2, pad=1.5, labelsize=6.5)
+        ax[1].set_xlabel("time (s)")
+        cb = fig.colorbar(lc, ax=ax, pad=.012, fraction=.02)
+        cb.set_label("longitudinal speed (m/s)", fontsize=7); cb.ax.tick_params(labelsize=6, length=2)
+        fig.text(.45, .005, "red bands: periods when the exit stop line is on", ha="center",
+                 fontsize=6.5, color="#C0392B")
+        fig.savefig(f"{out}/{name}", bbox_inches="tight", dpi=200); plt.close(fig)
 
 
 def vehicle_scores(rec):
@@ -352,6 +421,7 @@ def results_figs():
     mf.spacetime_pair(rec, test, dt, x0, FIG, stops=stops)
     os.replace(f"{FIG}/fig_stpair.pdf", f"{FIG}/fig_st_x.pdf")
     lateral_time(rec, dt, stops, FIG)
+    all_spacetime(rec, dt, x0, stops, FIG)
     vs = plan_good_bad(rec, x0, FIG)
     mf.class_speed(rec, x0, FIG)
     fig_rmse_spread(rec, FIG)
@@ -382,6 +452,8 @@ def main():
         shutil.copy(spread, f"{FIG}/fig_oat_spread.pdf")
         for m in ("F", "long", "lat", "speed"):
             shutil.copy(f"results/{FREE}/fig_oat_rmse_{m}.pdf", f"{FIG}/fig_oat_prof_{m}.pdf")
+        for m in ("key", "weak", "T_rmse"):
+            shutil.copy(f"results/{FREE}/fig_oat_{m}.pdf", f"{FIG}/fig_oat_{m}.pdf")
         shutil.copy(f"results/{FREE}/oat_summary.csv", f"{FIG}/oat_summary.csv")
     else:
         print("no sensitivity profiles yet for", FREE)

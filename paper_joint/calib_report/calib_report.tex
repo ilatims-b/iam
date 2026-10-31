@@ -18,7 +18,9 @@
 \setlength{\parskip}{4pt}
 
 \title{\vspace{-15mm}\textbf{Calibrating the intelligent-agent model to lane-free mixed traffic}}
-\author{Smitali Bhandari}
+\author{Smitali Bhandari \qquad Bhargava Rama Chilukuri\\[3pt]
+\small Department of Civil Engineering, Indian Institute of Technology Madras\\[6pt]
+\normalsize UGRP Technical Report}
 \date{\today}
 
 \begin{document}
@@ -30,23 +32,22 @@ Mixed traffic in India moves without lane discipline: vehicles of very
 different sizes and abilities share the road and take any lateral position.
 This report calibrates the intelligent-agent model (IAM), a two-dimensional
 social-force extension of the intelligent driver model, to 781\,s of trajectory
-data of 554 vehicles in seven classes on a 204\,m road section. All vehicles
+data of vehicles in seven classes on a 204\,m road section. All vehicles
 are simulated together from their measured entry states, with one parameter
 vector per class, searched with CMA-ES, and an exit stop line taken from the
 measured signal-like stops. Vehicles are split into training and held-out sets
-within the same simulation. With all parameters calibrated, held-out vehicles
-are predicted over their whole time on the section with pooled errors of
-22.4\,m along the road, 1.51\,m across it and 2.60\,m/s in speed. Fixing the
-IDM parameters at values calibrated elsewhere on leader-follower pairs raises
-the longitudinal error to 35.5 and 49.3\,m, mainly because their desired speeds
-are far above the speeds of this congested stretch. One-at-a-time sensitivity
+within the same simulation. One-at-a-time sensitivity
 profiles show that the fit is governed by the car-following parameters of the
 largest classes, while the road-edge and lateral anisotropy parameters are
 hardly constrained. The calibrated traffic forms queues at the right times and
 places, but its lateral motion is a slow drift rather than the deliberate
 sideways moves of real vehicles, which points to the missing lateral target in
-the model.
+the model equations.
 \end{abstract}
+
+\begin{center}\small
+All code: \url{https://github.com/ilatims-b/iam}
+\end{center}
 
 \tableofcontents
 
@@ -151,25 +152,31 @@ with the IAM.
 \begin{enumerate}\setlength{\itemsep}{2pt}
 \item A calibration of the IAM to lane-free mixed traffic, with one parameter
 vector for each of six vehicle classes (96 parameters), on trajectory data of
-Indian mixed traffic.
-\item A calibration in which the whole record is one simulation: every vehicle
-enters from its measured state and then runs on its own simulated state, with
-simulated neighbours, for its whole time on the section. No trajectory is
-replayed, and the train/test split is by vehicle inside the same simulation
-(Section~\ref{sec:calib}).
-\item An exit boundary read from the data. The record is shown to be governed
-by a periodic, signal-like stop beyond the exit, which is added to the
-simulation as a virtual stop line active only during the measured stops
-(Appendix~\ref{app:signal}).
-\item Search boxes and a granularity for every parameter set from what drivers
-can do and from the measured traffic (Table~\ref{tab:bounds}).
+Indian mixed traffic, with quantitative errors on held-out vehicles. The IAM was
+introduced with simulations of lane-based and lane-free traffic and a
+comparison with naturalistic trajectories of one lane of an Athens arterial
+from the pNEUMA drone data \cite{pneuma20}, which reproduces the observed
+behaviour qualitatively and semi-quantitatively but reports no error measure;
+validation on truly lane-free mixed traffic was left for future work
+\cite{iam}. It had not been calibrated on Indian data.
+\item A new simulation and train/test set-up for calibration. The whole record
+is one simulation: every vehicle enters from its measured state and then runs on
+its own simulated state, with simulated neighbours, for its whole time on the
+section, and no trajectory is replayed. Vehicles are split into training and
+held-out sets inside this one simulation, so held-out vehicles take part as
+neighbours while their own errors are not used. Usual calibrations replay a
+measured leader and split by leader-follower pair or platoon, and
+multi-agent driving benchmarks split by whole scenario; we have not found a split
+by vehicle within one simulation used for calibrating traffic models
+(Section~\ref{sec:split}).
+
 \item A comparison of the free calibration with runs in which the IDM
 parameters are fixed at values calibrated elsewhere, as a single set and per
 class, showing that such values do not transfer to this site
 (Table~\ref{tab:runs}).
 \item One-at-a-time sensitivity profiles of all 102 class parameters, showing
 which parameters the data constrain and which they do not
-(Figures~\ref{fig:spread}--\ref{fig:profspeed}).
+(Figures~\ref{fig:key}--\ref{fig:Trmse} and Appendix~\ref{app:prof}).
 \end{enumerate}
 
 %======================================================================
@@ -560,6 +567,7 @@ only longitudinally. The evidence that the queues are caused by a signal beyond/
 the exit is summarised in Appendix~\ref{app:signal}.
 
 \subsection{Train/test split by vehicle}
+\label{sec:split}
 Vehicles are split into training and held-out sets within the same simulation.
 Within each class, vehicles are ordered by entry time and cut into groups of
 ten, and three of each group are held out at random: 387 training and 167
@@ -619,8 +627,11 @@ the 11 IAM parameters are calibrated per class (96 values); $\delta=4$.
 
 \begin{table}[H]\centering\footnotesize
 \caption{Mean $F$ and pooled RMSE~\eqref{eq:pooled} of position along the
-road (long.), position across it (lat.) and speed, for the three runs.
-Per-class values are in Appendix~\ref{app:cls}.}
+road (long.), position across it (lat.) and speed, for the three runs and for
+a constant-velocity baseline, in which each vehicle keeps its measured entry
+speed, along and across the road, for its whole time on the section; the
+baseline is scored on the same vehicles and frames. Per-class values are in
+Appendix~\ref{app:cls}.}
 \label{tab:runs}
 \input{figs/tab_runs}
 \end{table}
@@ -628,7 +639,9 @@ Per-class values are in Appendix~\ref{app:cls}.}
 \paragraph{Observations.}
 \begin{itemize}\setlength{\itemsep}{1pt}
 \item The \key{free fit has the lowest errors on every measure}: held-out pooled
-RMSE of 22.4\,m along the road, 1.51\,m across it and 2.60\,m/s in speed.
+RMSE of 22.4\,m along the road, 1.51\,m across it and 2.60\,m/s in speed,
+against 326.8\,m, 6.11\,m and 7.70\,m/s for constant velocity. Even the worst
+run reduces the baseline's longitudinal error by a factor of about seven.
 \item \key{Fixing the IDM at imported values raises the errors}: with the single
 set the held-out longitudinal error is 35.5\,m and the speed error 6.35\,m/s;
 with the per-class values 49.3\,m and 10.87\,m/s.
@@ -682,11 +695,11 @@ with every other parameter held at the fitted value, and the whole record is
 simulated again. The curve of $F$ against the value of one parameter of one
 class obtained this way is called a \emph{profile}; there are 102 profiles
 (17 parameters for 6 class vectors) and 3\,151 simulations in all.
-Figures~\ref{fig:profF}--\ref{fig:profspeed} show the profiles themselves, for
-$F$ and for the three pooled RMSEs of the training vehicles.
-Figure~\ref{fig:spread} summarises each profile by the distribution of $F$ over
-all values tried: a tall box means the fit depends strongly on that parameter;
-a box that stays on the dashed line means the data hardly constrain it.
+Figure~\ref{fig:key} shows the profiles of the six parameters with the largest
+effect on $F$, Figure~\ref{fig:weak} six that the data hardly constrain, and
+Figure~\ref{fig:Trmse} how the three pooled RMSEs respond to the time gap. All
+102 profiles, for $F$ and for each pooled RMSE, and a summary of each profile as
+the distribution of $F$ over all values tried, are in Appendix~\ref{app:prof}.
 
 The simulation is deterministic, so the same parameters always give the same
 $F$. Even so, $F$ is not smooth along a profile. A small change in one
@@ -697,44 +710,28 @@ measure this roughness as the median absolute difference of $F$ between
 neighbouring points of a profile: 0.24, or $1.9\,\%$ of the fitted $F$. A
 parameter whose profile varies by no more than a few such jumps over its whole
 box (a range below about 1.5) cannot be told apart from this roughness.
-
 \begin{figure}[H]\centering
-\includegraphics[width=\textwidth]{fig_oat_spread.pdf}
-\caption{One-at-a-time sensitivity of the free fit: training objective $F$
-over all values tried for each parameter, one box per class (box: quartiles;
-whiskers: 1.5 times the interquartile range; points: outliers). Dashed line:
-$F$ at the fit.}
-\label{fig:spread}
+\includegraphics[width=\textwidth]{fig_oat_key.pdf}
+\caption{Profiles of the six parameters with the largest effect on the fit:
+training objective $F$ against the value of one parameter, one line per class,
+all other parameters at the fit. Dots: fitted values; dashed: $F$ at the fit.}
+\label{fig:key}
 \end{figure}
 
 \begin{figure}[H]\centering
-\includegraphics[width=\textwidth,height=0.85\textheight,keepaspectratio]{fig_oat_prof_F.pdf}
-\caption{Profiles of the free fit: training objective $F$ against the value of
-one parameter, one line per class, all other parameters at the fit. Dots:
-fitted values (placed on the line between the two nearest grid points). Dashed:
-$F$ at the fit. Log-scaled parameters are drawn on a log axis.}
-\label{fig:profF}
+\includegraphics[width=\textwidth]{fig_oat_weak.pdf}
+\caption{Profiles as in Figure~\ref{fig:key}, for six parameters that the data
+hardly constrain: the lateral anisotropy, the IDM exponent and the four
+road-edge parameters. Note the narrow range of the vertical axes.}
+\label{fig:weak}
 \end{figure}
 
 \begin{figure}[H]\centering
-\includegraphics[width=\textwidth,height=0.85\textheight,keepaspectratio]{fig_oat_prof_long.pdf}
-\caption{Profiles as in Figure~\ref{fig:profF}, for the pooled RMSE of
-longitudinal position of the training vehicles.}
-\label{fig:proflong}
-\end{figure}
-
-\begin{figure}[H]\centering
-\includegraphics[width=\textwidth,height=0.85\textheight,keepaspectratio]{fig_oat_prof_lat.pdf}
-\caption{Profiles as in Figure~\ref{fig:profF}, for the pooled RMSE of lateral
-position of the training vehicles.}
-\label{fig:proflat}
-\end{figure}
-
-\begin{figure}[H]\centering
-\includegraphics[width=\textwidth,height=0.85\textheight,keepaspectratio]{fig_oat_prof_speed.pdf}
-\caption{Profiles as in Figure~\ref{fig:profF}, for the pooled RMSE of speed of
-the training vehicles.}
-\label{fig:profspeed}
+\includegraphics[width=\textwidth]{fig_oat_T_rmse.pdf}
+\caption{Pooled RMSE of the training vehicles against the time gap $T$ of each
+class, all other parameters at the fit: longitudinal position, lateral position
+and speed. Dashed: value at the fit.}
+\label{fig:Trmse}
 \end{figure}
 
 \paragraph{Observations.}
@@ -754,7 +751,7 @@ below 1.7), the exponent $\delta$ (0.9--1.7), and most parameters of Auto and
 MultiAxle, the classes with the fewest training vehicles (22 and 13).
 \item The pooled RMSEs do not always move with $F$: raising Bike's time gap
 to 1.5\,s lowers the speed error from 2.86 to 2.69\,m/s
-(Figure~\ref{fig:profspeed}) while $F$ rises from 12.52 to 15.0, and raising
+(Figure~\ref{fig:Trmse}) while $F$ rises from 12.52 to 15.0, and raising
 Car's $b$ to 2.5\,m/s$^2$ gives 2.70\,m/s at $F=17.1$. $F$ weighs position,
 lateral and speed errors together, and an improvement in one can cost more in
 the others.
@@ -767,24 +764,25 @@ of the box and $F$ rises away from it, so these boxes bind.
 All figures in this section are from the run with all parameters free.
 
 \subsection{Space-time diagrams}
-Figure~\ref{fig:stx} shows the position of every vehicle along the section
-against time, measured and calibrated, and Figure~\ref{fig:sty} the lateral
-position against time. Calibrated vehicles are below 0.5\,m/s on $24\,\%$ of
-frames, against $36\,\%$ measured.
+Figure~\ref{fig:allx} shows the position of every vehicle along the section
+against time, measured and calibrated, and Figure~\ref{fig:ally} the lateral
+position against time; the same diagrams for each class are in
+Appendix~\ref{app:stclass}. Calibrated vehicles are below 0.5\,m/s on $24\,\%$
+of frames, against $36\,\%$ measured.
 
 \begin{figure}[H]\centering
-\includegraphics[width=\textwidth,height=0.8\textheight,keepaspectratio]{fig_st_x.pdf}
-\caption{Space-time diagram per class over the whole record: position along
-the section against time, coloured by longitudinal speed. Left: measured.
-Right: calibrated, one simulation of the whole record. Red bands: periods when
-the exit stop line is on. $n$: vehicles of the class.}
-\label{fig:stx}
+\includegraphics[width=\textwidth,height=0.75\textheight,keepaspectratio]{fig_all_x.pdf}
+\caption{Space-time diagram of all 554 vehicles over the whole record: position
+along the section against time, coloured by longitudinal speed. Top: measured.
+Bottom: calibrated, one simulation of the whole record. Red bands: periods when
+the exit stop line is on.}
+\label{fig:allx}
 \end{figure}
 
 \paragraph{Observations.}
 \begin{itemize}\setlength{\itemsep}{1pt}
 \item \key{Queues form at the measured times}, growing back from the exit during
-each stop, for every class except Bike.
+each stop, for every class except Bike (Figure~\ref{fig:stx}).
 \item The calibrated queues are \key{shallower and shorter} than the measured
 ones.
 \item Between queues the calibrated vehicles travel at a \key{more uniform
@@ -793,17 +791,18 @@ yellow, are largely missing.
 \end{itemize}
 
 \begin{figure}[H]\centering
-\includegraphics[width=\textwidth,height=0.8\textheight,keepaspectratio]{fig_st_y.pdf}
-\caption{Lateral position against time per class, measured (left) and
-calibrated (right), coloured by longitudinal speed; $y=0$ is the median kerb
+\includegraphics[width=\textwidth,height=0.75\textheight,keepaspectratio]{fig_all_y.pdf}
+\caption{Lateral position of all vehicles against time, measured (top) and
+calibrated (bottom), coloured by longitudinal speed; $y=0$ is the median kerb
 and $y=8.9$\,m the far edge.}
-\label{fig:sty}
+\label{fig:ally}
 \end{figure}
 
 \paragraph{Observations.}
 \begin{itemize}\setlength{\itemsep}{1pt}
-\item Measured Cars, LCVs and Trucks hold a lateral position for long periods
-and then \key{move sideways in a few seconds}, which shows as steps.
+\item Measured vehicles, Cars, LCVs and Trucks in particular
+(Figure~\ref{fig:sty}), hold a lateral position for long periods and then
+\key{move sideways in a few seconds}, which shows as steps.
 \item Calibrated vehicles instead \key{drift slowly and steadily}, as slanted
 lines, and make few abrupt moves.
 \item Calibrated Bikes gather towards the far edge ($y\approx8$\,m) more
@@ -958,6 +957,15 @@ level off; the largest errors occur around the stop phases.
 \item Add a lateral target to the model, such as a preferred lateral position or
 a choice of gap, so that vehicles can make deliberate sideways moves, and model
 how Bikes pass the stop line and filter through queues.
+\item Model differences between drivers of one class, which a single vector
+per class averages out: in \cite{duggal} the spread of IDM values between
+drivers is about as large as their mean, and here per-vehicle errors vary
+widely within each class (Table~\ref{tab:rmsesd}). Two steps: a hierarchical
+calibration, in which each vehicle's IDM parameters are drawn from a class
+distribution whose mean and spread are fitted; and a regression that predicts a
+vehicle's parameters from its first 5--10\,s in the data (mean speed, peak
+acceleration, smallest accepted gap, lateral moves), trained on per-vehicle fits
+and scored only on the rest of each trajectory.
 \item Fix the parameters that the data do not constrain (lateral anisotropy,
 road-edge parameters, $\delta$) and refit the rest, with several optimiser seeds,
 and reopen the boxes that bind (Bike $v_0$ and $a$, Car $b$, Car and LCV $\sigma$).
@@ -1047,7 +1055,11 @@ transformer networks for trajectory prediction in autonomous driving,''
 M.~Papageorgiou, ``Deep reinforcement learning reward function design for
 autonomous driving in lane-free traffic,'' \emph{Systems}, 11(3):134, 2023.
 \bibitem{iam} M.~Treiber and A.~A.~Chaudhari, ``The intelligent-agent model: a
-fully two-dimensional microscopic traffic flow model,'' arXiv:2310.16816, 2023.
+fully two-dimensional microscopic traffic flow model,'' arXiv:2310.16816, 2023;
+accepted in \emph{Transportation Letters}.
+\bibitem{pneuma20} E.~Barmpounakis and N.~Geroliminis, ``On the new era of urban
+traffic monitoring with massive drone data: the pNEUMA large-scale field
+experiment,'' \emph{Transportation Research Part C}, 111:50--71, 2020.
 \bibitem{idm} M.~Treiber, A.~Hennecke and D.~Helbing, ``Congested traffic states
 in empirical observations and microscopic simulations,'' \emph{Physical Review
 E}, 62(2):1805--1824, 2000.
@@ -1171,6 +1183,77 @@ pairwise values. $\delta$ is not calibrated in the free fit.}
 \label{tab:duggalcmp}
 \input{figs/tab_duggal_cmp}
 \end{table}
+
+\section{Space-time diagrams by class}
+\label{app:stclass}
+The diagrams of Figures~\ref{fig:allx} and~\ref{fig:ally}, drawn separately for
+each vehicle class.
+
+\begin{figure}[H]\centering
+\includegraphics[width=\textwidth,height=0.8\textheight,keepaspectratio]{fig_st_x.pdf}
+\caption{Space-time diagram per class over the whole record: position along
+the section against time, coloured by longitudinal speed. Left: measured.
+Right: calibrated, one simulation of the whole record. Red bands: periods when
+the exit stop line is on. $n$: vehicles of the class.}
+\label{fig:stx}
+\end{figure}
+
+\begin{figure}[H]\centering
+\includegraphics[width=\textwidth,height=0.8\textheight,keepaspectratio]{fig_st_y.pdf}
+\caption{Lateral position against time per class, measured (left) and
+calibrated (right), coloured by longitudinal speed; $y=0$ is the median kerb
+and $y=8.9$\,m the far edge.}
+\label{fig:sty}
+\end{figure}
+
+\section{Sensitivity profiles}
+\label{app:prof}
+The profiles of the one-at-a-time sensitivity analysis of the free fit
+(Section~\ref{sec:calib}). Figure~\ref{fig:spread} summarises each profile by
+the distribution of $F$ over all values tried: a tall box means the fit depends
+strongly on that parameter; a box that stays on the dashed line means the data
+hardly constrain it. Figures~\ref{fig:profF}--\ref{fig:profspeed} show all
+profiles: training $F$ and the pooled RMSEs of the training vehicles against
+the value of one parameter of one class, with all other parameters at the fit.
+
+\begin{figure}[H]\centering
+\includegraphics[width=\textwidth]{fig_oat_spread.pdf}
+\caption{One-at-a-time sensitivity of the free fit: training objective $F$
+over all values tried for each parameter, one box per class (box: quartiles;
+whiskers: 1.5 times the interquartile range; points: outliers). Dashed line:
+$F$ at the fit.}
+\label{fig:spread}
+\end{figure}
+
+\begin{figure}[H]\centering
+\includegraphics[width=\textwidth,height=0.85\textheight,keepaspectratio]{fig_oat_prof_F.pdf}
+\caption{Profiles of the free fit: training objective $F$ against the value of
+one parameter, one line per class, all other parameters at the fit. Dots:
+fitted values (placed on the line between the two nearest grid points). Dashed:
+$F$ at the fit. Log-scaled parameters are drawn on a log axis.}
+\label{fig:profF}
+\end{figure}
+
+\begin{figure}[H]\centering
+\includegraphics[width=\textwidth,height=0.85\textheight,keepaspectratio]{fig_oat_prof_long.pdf}
+\caption{Profiles as in Figure~\ref{fig:profF}, for the pooled RMSE of
+longitudinal position of the training vehicles.}
+\label{fig:proflong}
+\end{figure}
+
+\begin{figure}[H]\centering
+\includegraphics[width=\textwidth,height=0.85\textheight,keepaspectratio]{fig_oat_prof_lat.pdf}
+\caption{Profiles as in Figure~\ref{fig:profF}, for the pooled RMSE of lateral
+position of the training vehicles.}
+\label{fig:proflat}
+\end{figure}
+
+\begin{figure}[H]\centering
+\includegraphics[width=\textwidth,height=0.85\textheight,keepaspectratio]{fig_oat_prof_speed.pdf}
+\caption{Profiles as in Figure~\ref{fig:profF}, for the pooled RMSE of speed of
+the training vehicles.}
+\label{fig:profspeed}
+\end{figure}
 
 \section{Evidence for a signal beyond the exit}
 \label{app:signal}

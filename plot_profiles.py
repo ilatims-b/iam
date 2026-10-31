@@ -62,6 +62,41 @@ def rmse_profiles(d, base_row, cp, params, col, out):
     fig.tight_layout(rect=[0.01, .03, 1, 1]); fig.savefig(out, bbox_inches="tight"); plt.close(fig)
 
 
+KEY_PARAMS = ["T", "s0", "a", "b", "s0y", "sensLat"]                 # largest effect on F
+WEAK_PARAMS = ["pushLat", "delta", "accLongBRef", "accLatBRef", "s0yB", "s0yLatB"]
+
+
+def panel_profiles(d, base_row, cp, panels, out, ylabel, nc=3):
+    """A chosen set of profiles, `panels` = [(parameter, measure)], `nc` per row,
+    each panel titled by its parameter (and its measure when they differ)."""
+    nr = int(np.ceil(len(panels) / nc))
+    fig, ax = plt.subplots(nr, nc, figsize=(7.1, 2.0 * nr + (0.4 if nr == 1 else 0)), squeeze=False)
+    one_metric = len({c for _, c in panels}) == 1
+    for i, (p, col) in enumerate(panels):
+        A = ax.flat[i]; lo, hi, log = REALISTIC_BOUNDS[p]
+        for c, g in d[d.param == p].groupby("cls"):
+            g = g.sort_values("value")
+            A.plot(g.value, g[col], color=CCOL.get(c, "#333"), lw=1.3, label=c)
+            v = cp[c].get(p)
+            if v is not None:
+                A.plot([v], [np.interp(v, g.value, g[col])], "o", color=CCOL.get(c, "#333"),
+                       ms=3.4, mec="white", mew=.6, zorder=5)
+        if log:
+            A.set_xscale("log"); A.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
+        A.axhline(base_row[col], color="#666", lw=.6, ls="--")
+        A.set_xlim(lo, hi); A.tick_params(length=2, pad=1, labelsize=7)
+        short = {"F": "$F$", "long": "longitudinal position (m)", "lat": "lateral position (m)",
+                 "speed": "speed (m/s)"}
+        A.set_title(LABEL.get(p, p) if one_metric else short[col], fontsize=8.5, pad=3)
+        if not one_metric: A.set_xlabel(LABEL.get(p, p), fontsize=7.5)
+    for j in range(len(panels), nr * nc): ax.flat[j].axis("off")
+    h, l = ax.flat[0].get_legend_handles_labels()
+    fig.legend(h, l, loc="lower center", ncol=6, frameon=False, fontsize=7.5, bbox_to_anchor=(.5, -.02))
+    if ylabel: fig.supylabel(ylabel, fontsize=7.5, x=.005)
+    fig.tight_layout(rect=[0.01, .1 if nr == 1 else .05, 1, 1])
+    fig.savefig(out, bbox_inches="tight"); plt.close(fig)
+
+
 def spread_boxes(d, base, params, out):
     """Distribution of F over all values tried, one box per class, per parameter."""
     nc = 4; nr = int(np.ceil(len(params) / nc))
@@ -97,6 +132,11 @@ def main():
     for col in METRIC:
         rmse_profiles(d, base_row, cp, params, col, f"{a.run}/fig_oat_rmse_{col}.pdf")
     spread_boxes(d, base, params, f"{a.run}/fig_oat_spread.pdf")
+    lab = f"training objective $F$ (dashed: value at the fit, {base:.2f})"
+    panel_profiles(d, base_row, cp, [(p, "F") for p in KEY_PARAMS], f"{a.run}/fig_oat_key.pdf", lab)
+    panel_profiles(d, base_row, cp, [(p, "F") for p in WEAK_PARAMS], f"{a.run}/fig_oat_weak.pdf", lab)
+    panel_profiles(d, base_row, cp, [("T", m) for m in ("long", "lat", "speed")],
+                   f"{a.run}/fig_oat_T_rmse.pdf", "pooled RMSE, training vehicles (dashed: value at the fit)")
     nc = 4; nr = int(np.ceil(len(params) / nc))
     fig, ax = plt.subplots(nr, nc, figsize=(7.1, 1.75 * nr))
     rows = []
