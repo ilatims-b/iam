@@ -24,11 +24,41 @@ the bugs found along the way and the results they invalidated.
 
 ---
 
+## Setup
+
+The code is imported as the package `iam_calib`, so clone into a folder of that
+name; the commands below run from inside it with `PYTHONPATH=..`.
+
+```bash
+git clone https://github.com/ilatims-b/iam iam_calib
+cd iam_calib
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+Use `.venv/bin/python` (or activate the environment) wherever the commands
+below say `python`. Developed with Python 3.12.
+
 ## Data
 
 The trajectory record (`D3F1_lcl_smtF.csv`) and the vehicle dimensions were
 shared for this project and are not included. Place the file in the repository
 root to rerun anything below.
+
+## Local files and disk space
+
+A working copy takes about 800 MB, almost all of it in files that git ignores:
+
+| File or folder | Size | Needed for | Recreate with |
+|---|---|---|---|
+| `.venv/` | ~460 MB | everything | the setup commands above |
+| `D3F1_lcl_smtF.csv` | ~170 MB | calibration, figures, tables | not recreatable; keep a copy |
+| `synthetic.csv` | ~95 MB | tests only | `python make_synthetic.py ...` (see [Tests](#tests)) |
+| `__pycache__/` | ~2 MB | compiled Numba kernels | rebuilt automatically on the next run |
+| `paper_joint/calib_report/*.pdf` | ~5 MB each | reading the report | `pdflatex` (see below) |
+
+`.venv/`, `synthetic.csv` and `__pycache__/` can be deleted at any time to free
+space. `git gc` compresses the local git history.
 
 ## What is included
 
