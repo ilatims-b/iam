@@ -19,7 +19,7 @@ dependencies = [
 test = ["pytest>=7.0"]
 
 # The package's own source files (config.py, data.py, model.py, ...) live at
-# the repo root alongside run_calibration.py, not under a src/iam_calib/
+# the repo root, not under a src/iam_calib/
 # subdirectory -- point setuptools at "." so `pip install -e .` picks them up
 # as the `iam_calib` package from wherever the repo happens to be checked out.
 [tool.setuptools]

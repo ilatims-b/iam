@@ -11,7 +11,7 @@ lateral position and speed.
 A flat profile means the data cannot pin the parameter down; a sharp minimum
 means it is identified; a minimum on the edge of the box means the box binds.
 
-    python oat_profiles.py --run results/j11_allfree --workers 8
+    python oat_profiles.py --run results/j12_dims --workers 8
 """
 import argparse, json, os, time
 import numpy as np, pandas as pd

@@ -9,7 +9,7 @@ fitted values. Summary, per parameter and class:
          profile: near 1 means the data barely constrain it;
   edge   whether the best point on the profile lies at an end of the box.
 
-    python plot_profiles.py --run results/j11_allfree
+    python plot_profiles.py --run results/j12_dims
 """
 import argparse, json
 import numpy as np, pandas as pd

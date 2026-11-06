@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 *.egg-info/
+.pytest_cache/
 
 # Virtual env
 .venv/
@@ -15,7 +16,8 @@ __pycache__/
 
 # Calibration outputs: only the small files needed to rebuild the report's
 # figures and tables are kept (the three compared runs and the sensitivity
-# profiles of the free fit); logs, old runs and large arrays stay local
+# profiles of the free fit). Every other run is in the further-experiments
+# archive linked from the README.
 results/*
 !results/idm_duggal_by_class.json
 !results/idm_duggal_by_class_annotated.json
@@ -29,8 +31,7 @@ results/j1[234]_*/*
 !results/j1[234]_*/convergence.csv
 !results/j12_dims/oat_profiles.csv
 
-# Drafts and earlier reports stay local; only the calibration report is kept
-paper/
+# Report: sources and figures are kept, build outputs are not
 paper_joint/*
 !paper_joint/calib_report/
 paper_joint/calib_report/*.pdf
@@ -38,11 +39,7 @@ paper_joint/calib_report/*.aux
 paper_joint/calib_report/*.log
 paper_joint/calib_report/*.out
 paper_joint/calib_report/*.toc
+paper_joint/calib_report/*.fls
+paper_joint/calib_report/*.fdb_latexmk
 paper_joint/calib_report/figs/scores_*.json
 paper_joint/calib_report/figs/numbers.json
-
-# Scripts of earlier experiments, not used by the report
-j4_report.py
-make_tables.py
-tgap_measure.py
-literature_review_approaches.svg

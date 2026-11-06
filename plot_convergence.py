@@ -7,7 +7,7 @@ generations in <run>.log. Top: the objective (best so far, and the best and
 median of each generation). Bottom: the CMA-ES step size, which shrinks as the
 search settles.
 
-    python plot_convergence.py results/j10_idmfixed --compare results/j9_signal
+    python plot_convergence.py results/j14_chandra_dims --compare results/j12_dims
 """
 import argparse, os, re
 import numpy as np, pandas as pd

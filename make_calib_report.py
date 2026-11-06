@@ -26,18 +26,73 @@ from matplotlib.lines import Line2D
 
 from iam_calib.config import SPEC_BY_NAME, REALISTIC_BOUNDS, GRANULARITY, PARAM_SPECS
 import iam_calib.make_figs as mf
-import iam_calib.make_runs_report as rr
 from iam_calib import calibrate_joint as cj
 from iam_calib.config import PipelineConfig
+from iam_calib.calibrate import default_params
+from iam_calib.fastcore import PARAM_ORDER
 
 OUT = "paper_joint/calib_report"; FIG = f"{OUT}/figs"
 FREE = "j12_dims"
-CHANDRA = "j14_chandra_dims" if os.path.exists("results/j14_chandra_dims/class_params.json") \
-    else "j11_idmfixed"
+CHANDRA = "j14_chandra_dims"
 RUNS = [("chandra", CHANDRA, "Fixed IDM, single set \\cite{chandra}"),
         ("duggal", "j13_duggal_idm", "Fixed IDM, per class \\cite{duggal}"),
         ("free", FREE, "All parameters free")]
 CLASSES = ["Auto", "Bike", "Car", "LCV", "Truck", "MultiAxle", "Trailer"]
+CONV_COL = ["#1F4E79", "#1F7A6B", "#8A5FB0"]
+
+
+def conv(run):
+    return pd.read_csv(f"results/{run}/convergence.csv")
+
+
+def scores(run):
+    """Per class and pooled over all, for train and test: vehicles, mean F,
+    pooled RMSE of longitudinal position, lateral position and speed."""
+    cache = f"{FIG}/scores_{run}.json"
+    if os.path.exists(cache) and os.path.getmtime(cache) > os.path.getmtime(
+            f"results/{run}/class_params.json"):
+        return json.load(open(cache))
+    rc = json.load(open(f"results/{run}/run_config.json"))
+    cj.apply_bounds({k: tuple(v) for k, v in rc["overrides"].items()})
+    cfg = PipelineConfig(); cfg.road.y_right, cfg.road.y_left, cfg.road.enabled = 0.0, 8.9, True
+    cfg.vehicle_dims.update({k: tuple(v) for k, v in rc.get("dims", {}).items()})
+    df = pd.read_csv("D3F1_lcl_smtF.csv")
+    tr, te, _ = cj.whole_record(df, cfg, 1 - rc.get("train_frac", 0.7), rc.get("split_seed", 1),
+                                rc.get("exit_signal", False))
+    cp = json.load(open(f"results/{run}/class_params.json")); classes = sorted(cp)
+    P = np.array([[{**default_params(), **cp[c]}[k] for k in PARAM_ORDER] for c in classes])
+    grp, _ = cj.group_thin([tr], cfg.vehicle_dims, 10)
+    cidx = {c: classes.index(grp[c]) for c in grp}
+    out = {}
+    for split, s in (("train", tr), ("test", te)):
+        rows = cj.scene_errors(s, P, cidx, cfg.road, with_n=True)
+        d = pd.DataFrame(rows, columns=["F", "x", "y", "v", "cls", "n"])
+        d["F"] = d.F.where(np.isfinite(d.F), 60.0).clip(upper=60.0)
+        res = {}
+        for c, g in list(d.groupby("cls")) + [("all", d)]:
+            pool = lambda k: float(np.sqrt((g.n * g[k] ** 2).sum() / g.n[np.isfinite(g[k])].sum()))
+            res[c] = dict(n=int(len(g)), F=float(g.F.mean()), x=pool("x"), y=pool("y"), v=pool("v"))
+        out[split] = res
+    json.dump(out, open(cache, "w"), indent=1)
+    return out
+
+
+def fig_conv(run, key, col):
+    d = conv(run)
+    fig, ax = plt.subplots(2, 1, figsize=(6.4, 3.6), sharex=True,
+                           gridspec_kw={"height_ratios": [2.2, 1]})
+    ax[0].plot(d.evaluations, d.gen_median, color="#BBBBBB", lw=.5, label="median of each generation")
+    ax[0].plot(d.evaluations, d.gen_best, color="#9DB9D5", lw=.5, label="best of each generation")
+    ax[0].plot(d.evaluations, d.best_so_far, color=col, lw=1.4, label="best so far")
+    lo = d.best_so_far.min()
+    hi = np.percentile(d.gen_median, 95)
+    ax[0].set_ylim(lo * .95, max(hi * 1.05, lo * 1.2))
+    ax[0].set_ylabel("training objective $F$"); ax[0].legend(fontsize=6, frameon=False)
+    ax[1].plot(d.evaluations, d.sigma, color=col, lw=1)
+    ax[1].set_yscale("log"); ax[1].set_ylabel("CMA-ES step size")
+    ax[1].set_xlabel("objective evaluations (one evaluation = one simulation of the whole record)")
+    fig.tight_layout(); fig.savefig(f"{FIG}/fig_conv_{key}.pdf", bbox_inches="tight"); plt.close(fig)
+
 IDM = ["v0", "T", "s0", "a", "b", "delta"]
 IAM = ["s0y", "s0yLat", "sensLat", "tauLatOVM", "pushLong", "pushLat", "accBiasLat",
        "accLongBRef", "accLatBRef", "s0yB", "s0yLatB"]
@@ -434,19 +489,17 @@ def results_figs():
 # --------------------------------------------------------------------------
 def main():
     os.makedirs(FIG, exist_ok=True)
-    rr.FIG = FIG
     tab_bounds(); tab_duggal_cmp()
     # measured-only figures: the exit-signal evidence and the literature flowchart
     import subprocess, sys
     subprocess.run([sys.executable, "-m", "iam_calib.signal_fig", "--out", FIG], check=True,
                    stdout=subprocess.DEVNULL)
     shutil.copy("literature_review_approaches.png", f"{FIG}/fig_litreview.png")
-    sc ={key: rr.scores(run) for key, run, _ in RUNS}
+    sc ={key: scores(run) for key, run, _ in RUNS}
     tab_runs(sc)
     for key, run, _ in RUNS:
         tab_cls(sc, key); tab_par(key, run)
-        d = rr.conv(run); i = ["chandra", "duggal", "free"].index(key)
-        rr.fig_conv(run, i + 1); os.replace(f"{FIG}/conv_{run}.pdf", f"{FIG}/fig_conv_{key}.pdf")
+        fig_conv(run, key, CONV_COL[["chandra", "duggal", "free"].index(key)])
     spread = f"results/{FREE}/fig_oat_spread.pdf"
     if os.path.exists(spread):
         shutil.copy(spread, f"{FIG}/fig_oat_spread.pdf")

@@ -9,7 +9,7 @@ blocks are shaded wherever time is on an axis, and the single-vehicle figures
 use held-out vehicles only.
 
     python make_figs.py --run results/j6_30_a --scene-s 30
-    python make_figs.py --run results/j8_whole --whole-record --suffix _whole
+    python make_figs.py --run results/j12_dims --whole-record
 
 Under --whole-record the record is one scene with no reset anywhere, the
 held-out set is a set of vehicles rather than of blocks, and nothing is shaded.
