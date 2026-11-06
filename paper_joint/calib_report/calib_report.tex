@@ -7,6 +7,8 @@
 \usepackage{longtable}
 \usepackage[font=small,labelfont=bf,skip=5pt]{caption}
 \usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric}
 % placeholder for a citation still to be added from the literature-review notes
 \newcommand{\refneeded}[1]{\textcolor{red}{[ref: #1]}}
 % key phrase in observations: bold italic
@@ -17,14 +19,31 @@
 \setlength{\parindent}{0pt}
 \setlength{\parskip}{4pt}
 
-\title{\vspace{-15mm}\textbf{Calibrating the intelligent-agent model to lane-free mixed traffic}}
-\author{Smitali Bhandari \qquad Bhargava Rama Chilukuri\\[3pt]
-\small Department of Civil Engineering, Indian Institute of Technology Madras\\[6pt]
-\normalsize UGRP Technical Report}
-\date{\today}
-
 \begin{document}
-\maketitle
+\begin{titlepage}
+\centering
+\vspace*{30mm}
+{\LARGE\bfseries Calibrating the intelligent-agent model to lane-free mixed traffic\par}
+\vspace{12mm}
+{\large UGRP Technical Report\par}
+\vspace{4mm}
+{\large Course number: CE4901\par}
+\vspace{25mm}
+{\large Submitted by\par}
+\vspace{2mm}
+{\Large\bfseries Smitali Bhandari\par}
+\vspace{1mm}
+{\large Roll number: CE24B119\par}
+\vspace{15mm}
+{\large Project guide\par}
+\vspace{2mm}
+{\Large\bfseries Prof.\ Bhargava Rama Chilukuri\par}
+\vfill
+{\large Department of Civil Engineering\par}
+{\large Indian Institute of Technology Madras\par}
+\vspace{4mm}
+{\large \today\par}
+\end{titlepage}
 
 \begin{abstract}
 \noindent
@@ -50,6 +69,7 @@ All code: \url{https://github.com/ilatims-b/iam}
 \end{center}
 
 \tableofcontents
+\newpage
 
 %======================================================================
 \section{Introduction}
@@ -220,7 +240,7 @@ a_{\mathrm{IDM}}=a\Big[1-\big(\tfrac{v}{v_0}\big)^{\delta}-\big(\tfrac{s^{*}}{s}
 \end{equation}
 \begin{equation}
 \tilde a=\begin{cases}\dfrac{v^{2}a_l}{v_l^{2}-2sa_l}, & \kappa<0,\\[6pt]
-a_l-\dfrac{\Delta v^{2}}{2\max(s,0.1)}\mathbb{1}_{\Delta v>0}, & \text{otherwise,}\end{cases}
+a_l-\dfrac{\Delta v^{2}}{2\max(s,0.1)}\mathbf{1}_{\Delta v>0}, & \text{otherwise,}\end{cases}
 \end{equation}
 with $a_{\mathrm{CAH}}=\min(a,\tilde a)$ and
 \begin{equation}
@@ -229,10 +249,125 @@ f^{\mathrm{CF}}=\max\!\big(-b_{\max},\;0.99\,a_{\mathrm{mix}}+0.01\,a_{\mathrm{I
 \end{equation}
 where $a_{\mathrm{mix}}=a_{\mathrm{IDM}}$ when $a_{\mathrm{IDM}}>a_{\mathrm{CAH}}$
 and $a_{\mathrm{CAH}}+b\tanh[(a_{\mathrm{IDM}}-a_{\mathrm{CAH}})/b]$ otherwise.
-The CAH handles cut-ins: when a vehicle moves into the gap ahead, the gap
-collapses and the IDM alone would brake hard, although the new leader is not
-braking and the gap will not shrink further. The retained one per cent of pure
-IDM keeps its string stability.
+Here $\mathbf{1}_{\Delta v>0}$ is 1 when the follower is closing in on the
+leader and 0 otherwise.
+\begin{itemize}
+\item \emph{Desired gap $s^*$.}
+\begin{itemize}
+\item $s_0$: gap kept at standstill.
+\item $vT$: gap kept in steady following, at time headway $T$.
+\item $v\Delta v/2\sqrt{ab}$: extra room when approaching a slower leader, so
+that the follower can slow down at about the comfortable deceleration $b$.
+\item $\max(0,\cdot)$: keeps $s^*\ge s_0$ when the leader pulls away.
+\end{itemize}
+\item \emph{IDM.}
+\begin{itemize}
+\item $1-(v/v_0)^\delta$: urge to reach the desired speed, zero at $v=v_0$;
+$\delta$ sets how fast it fades.
+\item $(s^*/s)^2$: braking when the gap is shorter than desired, growing fast as
+the gap shrinks.
+\item Weakness: it uses only gap and speeds. A vehicle cutting in a few metres
+ahead at the same speed makes $s^*/s$ large and the IDM brakes hard, although
+the gap is not closing. Such cut-ins are frequent in lane-free traffic.
+\end{itemize}
+\item \emph{CAH.} $\tilde a$ is the largest acceleration that still avoids a
+collision if the leader keeps its acceleration $a_l$
+(Figure~\ref{fig:cah}).
+\begin{itemize}
+\item $\kappa<0$: the leader brakes to a stop before the gap closes. It stops
+after $v_l^2/(-2a_l)$, so the follower has $s+v_l^2/(-2a_l)$ to stop in, which
+gives the first case.
+\item Otherwise: the leader is still moving when the gap closes. The follower
+must reach the leader's speed as the gap reaches zero, which needs
+$\Delta v^2/2s$ of deceleration on top of $a_l$.
+\item $\Delta v\le0$: the follower is not closing in and copies $a_l$.
+\item $\max(s,0.1)$ avoids division by zero, and $\min(a,\tilde a)$ caps the
+result at the maximum acceleration.
+\end{itemize}
+\item \emph{Blend $a_{\mathrm{mix}}$} (Figure~\ref{fig:accflow}).
+\begin{itemize}
+\item $a_{\mathrm{IDM}}>a_{\mathrm{CAH}}$: the IDM is already milder than the
+kinematics require and is kept.
+\item Otherwise, as after a cut-in, the CAH value is used. Since $\tanh\ge-1$,
+braking exceeds the CAH value by at most $b$, and there is no jump at the
+switch.
+\end{itemize}
+\item \emph{Force $f^{\mathrm{CF}}$.}
+\begin{itemize}
+\item The 1\% of pure IDM pulls the gap slowly back to $s^*$ and keeps the
+string stability of the IDM: small disturbances do not grow along a platoon.
+\item $g^{\mathrm{free}}$ is subtracted because (\ref{eq:main}) already adds it.
+\item $-b_{\max}$ bounds braking by what the vehicle can do.
+\end{itemize}
+\end{itemize}
+The IDM supplies the desired speed and gap and stable following. The CAH stops
+it from braking hard at tight but steady gaps, while still reacting to a
+braking leader. The minimum over leaders in (\ref{eq:main}) makes each vehicle
+respond to the most constraining vehicle ahead.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[>=Stealth,font=\small,
+  veh/.style={draw,thick,minimum width=9mm,minimum height=4mm,inner sep=0pt}]
+\begin{scope}
+\node[anchor=west] at (0,1.9) {(a) $\kappa<0$: leader stops first};
+\draw[gray] (0,0)--(7.4,0);
+\node[veh,fill=blue!15] (f) at (0.6,0.35) {$i$};
+\node[veh,fill=orange!25] (l) at (3.0,0.35) {$l$};
+\draw[->,thick,blue] (f.east)++(0,-0.35)--++(0.9,0) node[below]{$v$};
+\draw[->,thick,orange!80!black] (l.east)++(0,-0.35)--++(0.5,0) node[below]{$v_l,\,a_l<0$};
+\node[veh,dashed,fill=orange!10] (ls) at (6.6,0.35) {$l$};
+\node[veh,dashed,fill=blue!8] at (5.65,0.35) {$i$};
+\draw[<->] ([yshift=0.75cm]f.east)--node[above]{$s$}([yshift=0.75cm]l.west);
+\draw[<->] ([yshift=0.75cm]l.west)--node[above,font=\footnotesize]{$v_l^2/(-2a_l)$}([yshift=0.75cm]ls.west);
+\node[font=\footnotesize,align=center] at (3.7,-0.55)
+  {follower stops behind the stopped leader: room $s+v_l^2/(-2a_l)$};
+\end{scope}
+\begin{scope}[xshift=8.2cm]
+\node[anchor=west] at (0,1.9) {(b) otherwise: leader keeps moving};
+\draw[gray] (0,0)--(7.4,0);
+\node[veh,fill=blue!15] (f) at (0.6,0.35) {$i$};
+\node[veh,fill=orange!25] (l) at (3.0,0.35) {$l$};
+\draw[->,thick,blue] (f.east)++(0,-0.35)--++(1.1,0) node[below]{$v$};
+\draw[->,thick,orange!80!black] (l.east)++(0,-0.35)--++(0.6,0) node[below]{$v_l$};
+\node[veh,dashed,fill=blue!8] (fe) at (5.6,0.35) {$i$};
+\node[veh,dashed,fill=orange!10] at (6.5,0.35) {$l$};
+\draw[<->] ([yshift=0.75cm]f.east)--node[above]{$s$}([yshift=0.75cm]l.west);
+\node[font=\footnotesize,align=center] at (3.7,-0.55)
+  {closing speed $\Delta v$ removed over $s$: extra $-\Delta v^2/2s$};
+\end{scope}
+\end{tikzpicture}
+\caption{The two cases of the constant-acceleration heuristic. Solid: now;
+dashed: when the encounter ends, with the follower $i$ just reaching the
+leader $l$ at the leader's speed.}
+\label{fig:cah}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[>=Stealth,font=\small,node distance=6mm and 9mm,
+  box/.style={draw,rounded corners,align=center,minimum height=8mm,fill=gray!8},
+  dec/.style={draw,diamond,aspect=2.4,align=center,inner sep=1pt,fill=yellow!12}]
+\node[box] (in) {$s,\ v,\ v_l,\ a_l$};
+\node[box,right=of in,yshift=6mm] (idm) {IDM\\$a_{\mathrm{IDM}}$};
+\node[box,right=of in,yshift=-6mm] (cah) {CAH\\$a_{\mathrm{CAH}}$};
+\node[dec,right=of idm,yshift=-6mm] (q) {$a_{\mathrm{IDM}}>a_{\mathrm{CAH}}$?};
+\node[box,right=12mm of q,yshift=8mm] (y) {$a_{\mathrm{mix}}=a_{\mathrm{IDM}}$};
+\node[box,right=12mm of q,yshift=-8mm] (n) {$a_{\mathrm{mix}}=a_{\mathrm{CAH}}$\\$+\,b\tanh[\cdot]$};
+\node[box,below=8mm of n,anchor=north east,xshift=14mm] (f)
+  {$f^{\mathrm{CF}}=\max(-b_{\max},\,0.99a_{\mathrm{mix}}+0.01a_{\mathrm{IDM}}-g^{\mathrm{free}})$};
+\draw[->] (in.east)--(idm.west);
+\draw[->] (in.east)--(cah.west);
+\draw[->] (idm.east)--(q);
+\draw[->] (cah.east)--(q);
+\draw[->] (q.north)|-node[pos=0.75,above]{yes}(y.west);
+\draw[->] (q.south)|-node[pos=0.75,below]{no}(n.west);
+\draw[->] (n.south)--(n.south|-f.north);
+\draw[->] (y.east)-|([xshift=-4mm]f.north east);
+\end{tikzpicture}
+\caption{How the ACC car-following force is built from the IDM and the CAH.}
+\label{fig:accflow}
+\end{figure}
 
 The car-following force fades with the lateral offset of the leader and is
 weaker when the two are side by side,
@@ -439,6 +574,33 @@ for the 66 parameters of the fixed-IDM fits $\lambda=16$, $c_1=4.4\times10^{-4}$
 and $c_\mu=1.3\times10^{-3}$. With about 1\,300 generations in two hours, the
 free fit is of the same order as $n^2/\mu_{\mathrm{eff}}\approx1\,800$, so the
 covariance has only partly adapted by the time the run stops.
+
+\subsection{Choice of optimiser}
+CMA-ES was chosen for three reasons.
+\begin{itemize}
+\item \emph{It needs no gradients.} $F$ comes from a whole-record simulation with
+case splits and a cap, and it jumps between nearby parameter values. CMA-ES uses
+only the ranking of candidates, so this roughness matters less.
+\item \emph{It learns parameter coupling.} Its covariance matrix can capture
+trade-offs between parameters, such as $T$ and $s_0$, which both set the gap, and
+it handles their different units and ranges.
+\item \emph{It works on a limited budget.} The free fit searched 96 parameters in
+about 22\,000 simulations, with a small population and default settings, so no
+tuning runs were needed.
+\end{itemize}
+The alternatives we considered are the following.
+\begin{itemize}
+\item \emph{Genetic algorithm (GA), particle swarm optimisation (PSO) and
+differential evolution (DE).} These could also work, but they have more settings
+to tune, and each tuning run costs hours. They also do not explicitly model how
+parameters are coupled.
+\item \emph{Bayesian optimisation.} It works best up to about 20 parameters
+\cite{bo}, so it struggles with our 96.
+\item \emph{Gradient-based methods.} These would need a differentiable simulator,
+but the model has $\min$ and $\max$ terms and case splits.
+\end{itemize}
+We did not benchmark these methods, so CMA-ES was chosen as suited to the
+problem, not shown to be the best.
 
 \subsection{Objective and search space}
 For one vehicle trace, with $\hat\cdot$ denoting simulated quantities,
@@ -1071,6 +1233,8 @@ driver model to access the impact of driving strategies on traffic capacity,''
 arXiv:1604.00772, 2016.
 \bibitem{pycma} N.~Hansen, Y.~Akimoto and P.~Baudis, ``CMA-ES/pycma on GitHub,''
 Zenodo, doi:10.5281/zenodo.2559634, 2019.
+\bibitem{bo} P.~I.~Frazier, ``A tutorial on Bayesian optimization,''
+arXiv:1807.02811, 2018.
 \bibitem{duggal} N.~Duggal, ``Heterogeneity in vehicle following behaviour across
 strict--staggered characteristics, LF pair type, and EV--non-EV interactions,''
 project presentation (supervisors K.~K.~Srinivasan, B.~R.~Chilukuri and
